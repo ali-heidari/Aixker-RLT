@@ -202,3 +202,32 @@ and has the same bugs.
 Skipped. The algorithm is one-step only: each experience stores one reward for
 one action and no next state, and there is no return or bootstrapping. A
 delayed-reward test would test a feature the crate does not have.
+
+## Toy suite results
+
+`tests/toy_suite.rs`, run with
+`cargo test --release --test toy_suite -- --ignored --nocapture`.
+Seeds 1, 2, 3. Network 8 → 16 → 3, batch 64, replay 2,048.
+Budgets: bandit 1,500 batches, small-signal 4,000, null 3,000.
+
+- **Bandit / small-signal** columns: share of inference calls that return
+  the context's best action. Pass ≥ 0.95 / ≥ 0.90.
+- **Null** column: the largest share of any one action at inference, then
+  the trained policy's entropy (uniform = ln 3 = 1.0986). Pass: share ≤ 0.50
+  and entropy ≥ 0.989.
+- Inference is evaluated through `infer_action` after
+  `Node::set_default_factors(Infer)`, as an `Infer` node would run.
+
+| Stage | Bandit (s1 / s2 / s3) | Small-signal (s1 / s2 / s3) | Null (s1 / s2 / s3) | Passing |
+| ----- | --------------------- | --------------------------- | ------------------- | ------- |
+| Before fixes | 0.487 / 0.494 / 0.500 ✗ | 0.354 / 0.305 / 0.327 ✗ | 0.352, 1.099 / 0.360, 1.099 / 0.338, 1.099 ✓ | 1 / 3 |
+
+Before fixes:
+
+- **Bandit** collapses: one action takes 77-83% of all calls, for every
+  context. That's the reported "always hold" behavior.
+- **Small-signal** learns nothing. The policy stays uniform because the
+  learning rate decays to 1e-6 and the shaping penalty drowns the ±0.002
+  signal.
+- **Null** passes only because nothing is learned at all, for the same
+  reasons.
