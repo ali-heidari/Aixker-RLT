@@ -308,10 +308,19 @@ impl Model {
         format!("{}/{}.{}", dir, id, config.model_name)
     }
 
+    /// Write the checkpoint atomically: the JSON goes to `<path>.tmp`, which
+    /// is then renamed over the checkpoint, so a crash mid-write leaves the
+    /// old file, never a partial one. The data is not fsynced (too slow for
+    /// a save every batch), so this covers process crashes, not power loss.
     pub fn save_model(&self) -> anyhow::Result<()> {
         let json = serde_json::to_string(self)?;
-        let mut file = File::create(&self.path)?;
-        file.write_all(json.as_bytes())?;
+        let tmp = format!("{}.tmp", self.path);
+        {
+            // Closed before the rename, which Windows requires.
+            let mut file = File::create(&tmp)?;
+            file.write_all(json.as_bytes())?;
+        }
+        std::fs::rename(&tmp, &self.path)?;
         Ok(())
     }
 
@@ -507,5 +516,30 @@ mod tests {
         assert!((grads.norm() - 1.0).abs() < 1e-5);
         grads.clip_norm(5.0);
         assert!((grads.norm() - 1.0).abs() < 1e-5, "below the cap: unchanged");
+    }
+
+    #[test]
+    fn save_replaces_the_checkpoint_through_a_temp_file() {
+        let config = Configurations {
+            input_number: 3,
+            output_number: 3,
+            model_name: "atomic-save.json".to_owned(),
+            seed: Some(3),
+            ..Default::default()
+        };
+        let model = Model::new("test", &config);
+        let tmp = format!("{}.tmp", model.path);
+        // A broken checkpoint and a stale temp file, as a crash might leave.
+        std::fs::write(&model.path, "{broken").unwrap();
+        std::fs::write(&tmp, "partial").unwrap();
+
+        model.save_model().unwrap();
+        let saved = std::fs::read_to_string(&model.path);
+        let tmp_left = std::path::Path::new(&tmp).exists();
+        let _ = std::fs::remove_file(&model.path);
+
+        let saved: Model = serde_json::from_str(&saved.unwrap()).unwrap();
+        assert_eq!(saved.parameters(), model.parameters());
+        assert!(!tmp_left, "the temp file must be renamed away");
     }
 }

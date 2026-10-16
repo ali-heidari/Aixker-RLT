@@ -72,6 +72,12 @@ pub struct Configurations {
     /// action (greedy).
     #[serde(default = "default_infer_temperature")]
     pub infer_temperature: f32,
+    /// Save the checkpoint every N finished batches. `None` (default) saves
+    /// after every batch; `Some(0)` saves only when training ends.
+    /// `Node::start`/`start_with_config` always save once more when the
+    /// training loop ends.
+    #[serde(default)]
+    pub checkpoint_every: Option<u64>,
 }
 
 fn default_entropy_coef() -> f32 {
@@ -154,6 +160,7 @@ impl Default for Configurations {
             temperature_end: default_temperature_end(),
             exploration_batches: default_exploration_batches(),
             infer_temperature: default_infer_temperature(),
+            checkpoint_every: None,
         }
     }
 }
@@ -189,6 +196,7 @@ mod tests {
         assert!(c.epsilon_end <= 0.05 && c.temperature_end <= 1.0);
         assert!(!c.reward_shaping);
         assert_eq!(c.seed, None);
+        assert_eq!(c.checkpoint_every, None);
     }
 }
 

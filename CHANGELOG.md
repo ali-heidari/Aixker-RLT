@@ -7,6 +7,27 @@ break).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-16
+
+### Added
+
+- `checkpoint_every: Option<u64>` configuration option. When set, the node
+  saves the checkpoint only every N batches instead of after every batch.
+  `Some(0)` saves only when training ends. Unset (the default) keeps saving
+  after every batch. `Node::start`/`start_with_config` still save once more
+  when the training loop ends, whatever the setting.
+  `Configurations` struct literals need the new field or
+  `..Default::default()`.
+
+### Fixed
+
+- Checkpoints are written atomically. The JSON goes to `<checkpoint>.tmp`
+  first, which is then renamed over the checkpoint. Before, the file was
+  truncated and rewritten in place, so a crash during a save left a broken
+  checkpoint. This covers process crashes. The data is not fsynced, so an
+  OS crash or power loss right after a save can still break the file on
+  some file systems.
+
 ## [0.2.0] - 2026-10-16
 
 This release fixes the learning bugs that made every trained agent collapse

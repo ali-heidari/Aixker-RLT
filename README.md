@@ -165,6 +165,7 @@ Configuration is provided at startup via `initialize(...)` (or per node with `No
 | `reply_capacity` | Replay buffer capacity |
 | `interval_secs` | Interval for `TrainingWithInterval` mode |
 | `model_name` | Checkpoint file name |
+| `checkpoint_every` | Optional `u64`. Save the checkpoint every N batches. Unset = after every batch; `0` = only when training ends. The checkpoint is always saved when training ends, and written to a temp file that is then renamed, so a crash mid-save keeps the old file. |
 | `log_interval` | Log one line of training statistics every N batches (`0` = off). See [Training diagnostics](#training-diagnostics). |
 | `mode` | `RunningMode` (`Training`, `TrainingWithInterval`, `Infer`) |
 | `backend` | Optional `ComputeBackend` (`Cpu` default, `Gpu`) |
