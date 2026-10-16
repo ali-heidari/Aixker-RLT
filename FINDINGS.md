@@ -224,6 +224,7 @@ Budgets: bandit 1,500 batches, small-signal 4,000, null 3,000.
 | Fix 1: shaping off | 0.477 / 0.487 / 0.504 ✗ | 0.348 / 0.297 / 0.323 ✗ | 0.350, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 1 / 3 |
 | Fix 2: averaged + clipped gradients, lr 0.05 | 0.995 / 0.994 / 0.988 ✓ | 0.357 / 0.311 / 0.329 ✗ | 0.353, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 2 / 3 |
 | Fix 3: normalized advantage + importance weights | 0.989 / 0.995 / 0.991 ✓ | 0.991 / 0.986 / 0.993 ✓ | 0.563, 1.073 / 0.538, 1.080 / 0.578, 1.047 ✗ | 2 / 3 |
+| Fix 4: exploration schedule, inference T 0.5 | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.752 / 1.000 ✗ | 0.505, 1.079 / 0.475, 1.086 / 0.360, 1.098 ✗ | 1 / 3 |
 
 Before fixes:
 
@@ -273,4 +274,28 @@ Fix 3 notes:
   (sampling at T = 0.5, plus ε) sharpens its small, noise-driven tilt past
   50% for one action. Scale-free learning means pure noise now moves the
   policy a little. Fix 4 changes inference, so this is checked again there.
+
+Fix 4: inference temperature sweep (same training; only inference
+changes):
+
+| `infer_temperature` | Bandit | Small-signal | Null |
+| ------------------- | ------ | ------------ | ---- |
+| 0 (greedy) | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.750 / 1.000 ✗ | 1.000 / 1.000 / 0.750 ✗ |
+| **0.5** (default) | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.752 / 1.000 ✗ | 0.505 / 0.475 / 0.360 ✗ |
+| 1.0 | 0.998 / 0.999 / 1.000 ✓ | 0.994 / 0.769 / 0.999 ✗ | 0.425 / 0.402 / 0.351 ✓ |
+
+Fix 4 notes:
+
+- **Greedy fails the null test by construction.** When rewards are noise,
+  the policy is close to uniform but never exactly uniform. Argmax turns any
+  tiny tilt into "always action X", which is the reported collapse. So
+  inference samples at a low temperature instead (`infer_temperature`, 0 =
+  greedy is still available).
+- **Small-signal seed 2 regressed.** One context settled early on a wrong
+  action (p ≈ 0.85 vs 0.10 for the right one at T = 1). The policy-gradient
+  push on an action shrinks with its probability, so it can't climb back in
+  4,000 batches. Fix 3 only passed because the old rule kept ε near 0.7 the
+  whole time. With low exploration this local optimum is real.
+- **Null at T = 0.5** fails seed 1 by 0.005. The trained policy is not
+  confident (entropy 1.08), but noise still tilts it a little.
 

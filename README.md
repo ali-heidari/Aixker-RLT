@@ -168,6 +168,10 @@ Configuration is provided at startup via `initialize(...)` with a `Configuration
 | `reward_shaping` | Optional `bool`, default `false`. Rewrites rewards with a built-in bonus/penalty based on per-action success rates and frequencies. The penalty is up to about 0.5, so leave it off unless your rewards are on the order of ±1. |
 | `learning_rate` | Optional `f32`, default `0.05`. SGD step size, applied once per batch to the batch-averaged gradient. |
 | `max_grad_norm` | Optional `f32`, default `1.0`. Clips the gradient's global L2 norm; `0` disables clipping. |
+| `epsilon_start` / `epsilon_end` | Optional, default `0.3` / `0.05`. Random-action rate during training, moved linearly from start to end. |
+| `temperature_start` / `temperature_end` | Optional, default `1.5` / `1.0`. Sampling temperature during training, same schedule. |
+| `exploration_batches` | Optional, default `500`. Batches over which ε and temperature go from start to end. They stay at the end values afterwards. |
+| `infer_temperature` | Optional, default `0.5`. Temperature for `infer_action` and `Infer` mode. No random actions at inference. `0` = always the top action (greedy). |
 
 `Configurations` implements `Default`, so in Rust you only need to set what
 you change: `Configurations { input_number: 8, output_number: 3, ..Default::default() }`.

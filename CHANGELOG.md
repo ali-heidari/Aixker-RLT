@@ -31,6 +31,12 @@ break).
 - `Configurations::learning_rate` (default `0.05`) and
   `Configurations::max_grad_norm` (default `1.0`, `0` = off): gradient
   clipping by global L2 norm.
+- Exploration schedule: `epsilon_start`/`epsilon_end` (0.3 → 0.05),
+  `temperature_start`/`temperature_end` (1.5 → 1.0) and
+  `exploration_batches` (500). Inference temperature: `infer_temperature`
+  (0.5, `0` = greedy).
+- `Configurations::exploration_at(batch)`: the (ε, temperature) of the
+  schedule after `batch` batches.
 
 ### Changed
 
@@ -43,6 +49,17 @@ break).
   advantages, `(r - batch mean) / batch std`, instead of the raw reward.
   Only relative rewards within a batch matter now, and adding a constant
   to every reward changes nothing.
+- **Breaking (behavior):** exploration follows a fixed linear schedule.
+  Before, ε and temperature were tuned automatically and jumped to their
+  caps (ε 0.7, temperature 7) whenever the policy preferred one action, so a
+  learned policy was mostly ignored.
+- **Breaking (behavior):** `infer_action` no longer explores. It never takes
+  random actions and samples at `infer_temperature` (default 0.5). `Infer`
+  mode acts the same way. Before, it used the node's current ε and
+  temperature (up to 0.7 and 7 on a training node; 0.01 and 0.5 in `Infer`
+  mode).
+- `Node::set_default_factors` now sets the schedule's start values for
+  training modes, and ε 0 with `infer_temperature` for `Infer`.
 - **Fix:** replayed experiences are reweighted by a truncated importance
   weight `min(π(a|s) / b, 2)`. Before, old and ε-random actions were
   trained on as if the current policy had chosen them.

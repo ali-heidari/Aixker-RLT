@@ -221,16 +221,21 @@ impl Node {
         node
     }
 
+    /// Reset ε, temperature and learning rate for `mode`: the start of the
+    /// exploration schedule for training, or the inference settings (no
+    /// random actions, `infer_temperature`) for `Infer`.
     pub fn set_default_factors(node: &Arc<Node>, mode: RunningMode) {
-        *node.enable_adjustment.write().unwrap() = true;
-        let settings = match mode {
-            RunningMode::Infer => (0.01, 0.5, node.config.learning_rate, false),
-            _ => (0.5, 3.0, node.config.learning_rate, true),
+        let (epsilon, temperature, adjust) = match mode {
+            RunningMode::Infer => (0.0, node.config.infer_temperature, false),
+            _ => {
+                let (e, t) = node.config.exploration_at(0);
+                (e, t, true)
+            }
         };
-        *node.epsilon.write().unwrap() = settings.0;
-        *node.temperature.write().unwrap() = settings.1;
-        *node.lr.write().unwrap() = settings.2;
-        *node.enable_adjustment.write().unwrap() = settings.3;
+        *node.epsilon.write().unwrap() = epsilon;
+        *node.temperature.write().unwrap() = temperature;
+        *node.lr.write().unwrap() = node.config.learning_rate;
+        *node.enable_adjustment.write().unwrap() = adjust;
     }
 
     /// Store a finished batch's statistics, and log them every
@@ -245,14 +250,14 @@ impl Node {
         }
         self.set_loss(batch_number, stats.loss);
         *self.last_stats.write().unwrap() = Some(stats);
+
+        let (epsilon, temperature) = self.config.exploration_at(batch_number);
+        *self.epsilon.write().unwrap() = epsilon;
+        *self.temperature.write().unwrap() = temperature;
     }
 
     pub fn set_loss(&self, batch_number: u32, loss: f32) {
         {
-            if batch_number > 50 {
-                self.adjust_factors(!*self.diverging.read().unwrap());
-            }
-
             *self.loss.write().unwrap() = loss;
             self.batch_history
                 .write()
@@ -445,31 +450,6 @@ impl Node {
         action_ratios
     }
 
-    fn adjust_epsilon(&self, push_down: bool) {
-        let mut epsilon = *self.epsilon.read().unwrap();
-        if push_down {
-            epsilon = (epsilon * 0.99).max(0.01);
-        } else {
-            epsilon = (epsilon + 0.99).min(0.7);
-        }
-        *self.epsilon.write().unwrap() = epsilon;
-    }
-
-    fn adjust_temperature(&self, push_down: bool) {
-        let mut temperature = *self.temperature.read().unwrap();
-        if push_down {
-            temperature = (temperature * 0.99).max(0.5);
-        } else {
-            temperature = (temperature + 0.99).min(7.0);
-        }
-        *self.temperature.write().unwrap() = temperature;
-    }
-
-    fn adjust_factors(&self, down_trend: bool) {
-        self.adjust_epsilon(down_trend);
-        self.adjust_temperature(down_trend);
-    }
-
     fn detect_stuck(&self, success_rates: &[f32]) {
         // stuck detection (simple): success_rate mean hasn't improved
         let mean_success: f32 =
@@ -536,7 +516,13 @@ impl Node {
     ) where
         F: Fn(&Vec<f32>, u32, u32) -> (f32, bool),
     {
-        let selection = select_action(self, &inputs);
+        let selection = if self.mode == RunningMode::Infer {
+            select_action(self, &inputs, 0.0, self.config.infer_temperature)
+        } else {
+            let epsilon = *self.epsilon.read().unwrap();
+            let temperature = *self.temperature.read().unwrap();
+            select_action(self, &inputs, epsilon, temperature)
+        };
         let (action, logits, probs) = (selection.action, selection.logits, selection.probs);
         let (reward, success) = compute_reward_with_success(
             &inputs,

@@ -27,7 +27,7 @@ AION-RLT is a lightweight reinforcement learning trainer designed for embeddable
 Central orchestrator managing the RL lifecycle for a single agent.
 
 - Holds `Model` (network weights) and `ReplayBuffer` (experience storage)
-- Manages `epsilon` (exploration) and `temperature` (softmax control)
+- Manages `epsilon` (exploration) and `temperature` (softmax control), following the exploration schedule during training
 - Tracks training metrics: `batch_history`, `success_rate_mean`, divergence/stuck flags
 - Supports `RunningMode`: `Infer`, `Training`, `TrainingWithInterval`
 
@@ -92,14 +92,17 @@ The worker runs in the background; the application decides when to stop (counter
 
 ## Inference (`infer_action.rs`)
 
-Action selection via softmax + epsilon-greedy:
+Two action-selection rules share `select_action(node, features, ε, T)`:
 
 1. Forward pass: `logits = model.forward(features)`
-2. Softmax with temperature: `probs = softmax(logits / temperature)`
-3. Epsilon-greedy: with probability ε pick a random action, otherwise the most probable one
-4. Returns `(action_idx, logits, probabilities)`
+2. Softmax with temperature: `probs = softmax(logits / T)` (`T = 0` → argmax)
+3. With probability ε pick a uniform random action, otherwise sample from `probs`
+4. Return the action, logits, probabilities, and the probability this rule gave the chosen action (stored for off-policy correction)
 
-Pure greedy gets stuck in local optima; pure random never exploits learned knowledge. Epsilon balances both, and the Node adjusts it dynamically.
+- **Training** (`Node::next` in `Training`/`TrainingWithInterval`): ε and T follow a linear schedule from `epsilon_start`/`temperature_start` to `epsilon_end`/`temperature_end` over `exploration_batches` batches, then stay at the end values.
+- **Inference** (`infer_action`, and `Node::next` in `Infer` mode): no random actions, temperature `infer_temperature` (default 0.5; `0` = greedy).
+
+Greedy inference turns any small tilt of an uncertain policy into "always the same action". A low inference temperature keeps an uncertain policy uncertain, and a confident policy still picks its best action almost every time.
 
 ## Configuration (`configurations.rs`)
 
@@ -119,6 +122,10 @@ Provided at startup via `initialize(...)`:
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
 | `seed` (Option<u64>, optional) | Seeds all randomness; `None` = OS entropy (see `src/rng.rs`) |
+| `epsilon_start` / `epsilon_end` (f32, optional) | Training random-action rate schedule; default 0.3 → 0.05 |
+| `temperature_start` / `temperature_end` (f32, optional) | Training temperature schedule; default 1.5 → 1.0 |
+| `exploration_batches` (u32, optional) | Length of the linear schedule; default 500 |
+| `infer_temperature` (f32, optional) | Inference temperature, no random actions; default 0.5, `0` = greedy |
 | `reward_shaping` (bool, optional) | Built-in reward rewrite (`Node::adjust_settings`); default `false` = train on the raw reward |
 | `learning_rate` (f32, optional) | SGD step per batch; default `0.05` |
 | `max_grad_norm` (f32, optional) | Global-norm gradient clipping; default `1.0`, `0` = off |
@@ -132,8 +139,8 @@ Provided at startup via `initialize(...)`:
 - **Reward shaping** — off by default; when on, its fixed penalties (up to ~0.5) dwarf small rewards
 - **Buffer underflow** — training is skipped gracefully until `batch_size` experiences exist
 - **Checkpoint conflicts** — multiple agents writing the same `model_name` corrupt the file; use an ID suffix
-- **Temperature too low** — nearly deterministic, little exploration
-- **Epsilon too high** — mostly random actions, slow learning
+- **Exploration ending too early** — with small, noisy rewards a context can settle on a wrong action before the signal is clear; lengthen `exploration_batches` or raise `epsilon_end`
+- **Greedy inference** (`infer_temperature = 0`) — an uncertain policy then always picks the same action
 
 ## Extending AION-RLT
 

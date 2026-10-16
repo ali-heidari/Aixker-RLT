@@ -17,14 +17,24 @@ pub(crate) struct Selection {
     pub behavior_prob: f32,
 }
 
-/// Pick an action for `features` and return it with its logits and
-/// probabilities.
+/// Pick the action to take for `features`, without exploration: no random
+/// actions, sampling at `Configurations::infer_temperature` (`0` = greedy).
+/// Returns the action, the logits (shifted so the largest is 0) and the
+/// probabilities at that temperature.
 pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Vec<f32>) {
-    let s = select_action(node, features);
+    let s = select_action(node, features, 0.0, node.config().infer_temperature);
     (s.action, s.logits, s.probs)
 }
 
-pub(crate) fn select_action(node: &Node, features: &[f32]) -> Selection {
+/// Choose an action: with probability `epsilon` a uniform random one,
+/// otherwise a sample from `softmax(logits / temperature)`, or the argmax
+/// when `temperature` is 0.
+pub(crate) fn select_action(
+    node: &Node,
+    features: &[f32],
+    epsilon: f32,
+    temperature: f32,
+) -> Selection {
     let x = Array2::from_shape_vec((1, node.config().input_number), features.to_vec()).unwrap();
     let model = node.model.read().unwrap();
     let logits = model.forward(&x);
@@ -37,11 +47,19 @@ pub(crate) fn select_action(node: &Node, features: &[f32]) -> Selection {
         .collect();
     let logits = Array::from_shape_vec((1,num_actions), logits).unwrap();
 
-    let temperature = *node.temperature.read().unwrap();
-    let mut probs = Model::softmax(&logits, temperature);
-    // 4) Numerical safety: clamp and normalize
+    let mut probs = if temperature > 0.0 {
+        Model::softmax(&logits, temperature)
+    } else {
+        // Greedy: all probability on the first highest logit.
+        let best = logits
+            .iter()
+            .position(|&z| z == 0.0)
+            .unwrap_or(0);
+        (0..num_actions).map(|i| if i == best { 1.0 } else { 0.0 }).collect()
+    };
+    // Numerical safety: clamp and normalize
     for p in probs.iter_mut() {
-        if *p < 0.0 {
+        if p.is_nan() || *p < 0.0 {
             *p = 0.0
         }
     }
@@ -54,10 +72,8 @@ pub(crate) fn select_action(node: &Node, features: &[f32]) -> Selection {
         probs = vec![1.0 / probs.len() as f32; probs.len()];
     }
 
-    // 5) Epsilon-greedy exploration
-    let eps: f32 = *node.epsilon.read().unwrap();
     let mut rng = node.rng.lock().unwrap();
-    let action = if rng.gen::<f32>() < eps {
+    let action = if epsilon > 0.0 && rng.gen::<f32>() < epsilon {
         rng.gen_range(0..probs.len())
     } else {
         let dist = WeightedIndex::new(&probs).unwrap();
@@ -65,7 +81,7 @@ pub(crate) fn select_action(node: &Node, features: &[f32]) -> Selection {
     };
 
     let n = probs.len() as f32;
-    let behavior_prob = eps / n + (1.0 - eps) * probs[action];
+    let behavior_prob = epsilon / n + (1.0 - epsilon) * probs[action];
 
     Selection {
         action,
