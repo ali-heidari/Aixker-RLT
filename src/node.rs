@@ -5,7 +5,7 @@ use rand::rngs::StdRng;
 use crate::{footstep::Footstep, get_config as CONFIG};
 use aion_math::continuous_math::ContinuousMath;
 use aion_math::math::Math;
-use log::info;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
@@ -511,6 +511,12 @@ impl Node {
             *self.counter.read().unwrap() as u32,
         );
 
+        if !reward.is_finite() || inputs.iter().any(|x| !x.is_finite()) {
+            warn!("non-finite reward ({reward}) or input; experience dropped");
+            *self.counter.write().unwrap() += 1;
+            return;
+        }
+
         let adjusted_reward = if *self.enable_adjustment.read().unwrap() {
             self.adjust_settings(action, reward, success)
         } else {
@@ -584,6 +590,24 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(0);
         let buffer = node.buffer.read().unwrap();
         buffer.sample(200, &mut rng).iter().map(|e| e.reward).collect()
+    }
+
+    #[test]
+    fn non_finite_rewards_are_dropped() {
+        let config = Arc::new(Configurations {
+            input_number: 2,
+            output_number: 3,
+            model_name: "nan-reward.json".to_owned(),
+            seed: Some(1),
+            ..Default::default()
+        });
+        let node = Arc::new(Node::new_with_config(config, 0.5, 1.0, RunningMode::Training, "test"));
+        Node::set_default_factors(&node, RunningMode::Training);
+        let mut math = ContinuousMath::new();
+        for r in [f32::NAN, f32::INFINITY, 0.5] {
+            node.next(vec![0.1, 0.2], &mut math, move |_, _, _| (r, true));
+        }
+        assert_eq!(node.buffer.read().unwrap().len(), 1);
     }
 
     #[test]

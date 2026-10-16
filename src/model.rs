@@ -184,11 +184,15 @@ impl Model {
 
         let mut grads = self.policy_gradient(x, &probs, actions, &weights, entropy_coef);
         let stats = Self::batch_stats(&probs, actions, &weights, &grads);
+        if !stats.grad_norm.is_finite() {
+            warn!("non-finite gradient (norm {}); skipping this update", stats.grad_norm);
+            return stats;
+        }
         grads.clip_norm(max_grad_norm);
         self.apply_gradients(&grads, lr);
 
-        if self.w1.iter().any(|x| x.is_nan()) {
-            warn!("NaN detected in weights!");
+        if self.parameters().iter().any(|x| !x.is_finite()) {
+            warn!("non-finite values in the weights after an update");
         }
         stats
     }
@@ -311,26 +315,22 @@ impl Model {
         Ok(())
     }
 
+    /// Reset every weight that is not finite or has `|w| > 1e6` to 0, and
+    /// warn when that happens: it means training has diverged.
     pub fn sanitize(&mut self) {
-        for x in self.w1.iter_mut() {
+        let mut reset = 0usize;
+        let mut fix = |x: &mut f32| {
             if !x.is_finite() || x.abs() > 1e6 {
                 *x = 0.0;
+                reset += 1;
             }
-        }
-        for x in self.b1.iter_mut() {
-            if !x.is_finite() || x.abs() > 1e6 {
-                *x = 0.0;
-            }
-        }
-        for x in self.w2.iter_mut() {
-            if !x.is_finite() || x.abs() > 1e6 {
-                *x = 0.0;
-            }
-        }
-        for x in self.b2.iter_mut() {
-            if !x.is_finite() || x.abs() > 1e6 {
-                *x = 0.0;
-            }
+        };
+        self.w1.iter_mut().for_each(&mut fix);
+        self.b1.iter_mut().for_each(&mut fix);
+        self.w2.iter_mut().for_each(&mut fix);
+        self.b2.iter_mut().for_each(&mut fix);
+        if reset > 0 {
+            warn!("sanitize reset {reset} non-finite or exploded weights to 0; training has diverged");
         }
         // Keep the GPU copy in sync with the sanitized CPU weights.
         if let Some(gpu) = &self.gpu {
@@ -479,6 +479,17 @@ mod tests {
         for (a, b) in rare.iter().zip(&unknown) {
             assert!((a - MAX_IMPORTANCE_WEIGHT * b).abs() < 1e-5, "{a} vs {b}");
         }
+    }
+
+    #[test]
+    fn non_finite_gradients_skip_the_update() {
+        let (x, actions, _) = batch();
+        let mut model = tiny_model();
+        let before = model.parameters();
+        let rewards = Array1::from_vec(vec![1.0, f32::NAN, 0.3, 0.8]);
+        let stats = model.reinforce(&x, &actions, &rewards, &Array1::zeros(4), 0.1, 1.0, 0.1);
+        assert!(!stats.grad_norm.is_finite());
+        assert_eq!(before, model.parameters());
     }
 
     #[test]

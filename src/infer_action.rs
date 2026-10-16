@@ -1,6 +1,7 @@
 use crate::model::Model;
 
 use super::node::Node;
+use log::warn;
 use ndarray::{Array, Array2};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::Rng;
@@ -69,6 +70,7 @@ pub(crate) fn select_action(
             *p /= sum;
         }
     } else {
+        warn!("non-finite or zero action probabilities; acting uniformly at random");
         probs = vec![1.0 / probs.len() as f32; probs.len()];
     }
 
