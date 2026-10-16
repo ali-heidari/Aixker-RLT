@@ -225,6 +225,7 @@ Budgets: bandit 1,500 batches, small-signal 4,000, null 3,000.
 | Fix 2: averaged + clipped gradients, lr 0.05 | 0.995 / 0.994 / 0.988 ✓ | 0.357 / 0.311 / 0.329 ✗ | 0.353, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 2 / 3 |
 | Fix 3: normalized advantage + importance weights | 0.989 / 0.995 / 0.991 ✓ | 0.991 / 0.986 / 0.993 ✓ | 0.563, 1.073 / 0.538, 1.080 / 0.578, 1.047 ✗ | 2 / 3 |
 | Fix 4: exploration schedule, inference T 0.5 | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.752 / 1.000 ✗ | 0.505, 1.079 / 0.475, 1.086 / 0.360, 1.098 ✗ | 1 / 3 |
+| Round 1: entropy bonus β = 0.1 | 1.000 / 1.000 / 1.000 ✓ | 0.998 / 0.998 / 0.999 ✓ | 0.413, 1.091 / 0.377, 1.097 / 0.354, 1.098 ✓ | 3 / 3 |
 
 Before fixes:
 
@@ -298,4 +299,27 @@ Fix 4 notes:
   whole time. With low exploration this local optimum is real.
 - **Null at T = 0.5** fails seed 1 by 0.005. The trained policy is not
   confident (entropy 1.08), but noise still tilts it a little.
+
+### Investigation round 1: entropy bonus
+
+Two problems were left after fix 4. Small-signal seed 2 got stuck on a wrong
+action, and the null policy drifted with the noise. Both come from the
+policy becoming confident before the evidence supports it. The standard
+remedy is an entropy bonus: the loss gets `-β · H(π)`, which pulls the policy
+back toward uniform unless the advantages push harder. It works on
+normalized advantages, so `β` does not depend on the reward scale.
+
+| `entropy_coef` β | Bandit | Small-signal | Null (largest share) |
+| ---------------- | ------ | ------------ | -------------------- |
+| 0 (fix 4) | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.752 / 1.000 ✗ | 0.505 / 0.475 / 0.360 ✗ |
+| 0.01 | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.999 / 1.000 ✓ | 0.486 / 0.469 / 0.348 ✓ |
+| 0.03 | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.999 / 1.000 ✓ | 0.474 / 0.432 / 0.338 ✓ |
+| **0.1** (default) | 1.000 / 1.000 / 1.000 ✓ | 0.998 / 0.998 / 0.999 ✓ | 0.413 / 0.377 / 0.354 ✓ |
+
+- Every β tried passes all 9 runs. β = 0.1 is the default because it leaves
+  the widest margin on the null test (0.413 vs the 0.50 limit), at almost
+  no cost on the bandits.
+- Seed 2 of small-signal now finds the right action. The bonus kept that
+  context from locking in early.
+- One round was needed, out of the 3 allowed.
 

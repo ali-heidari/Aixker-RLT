@@ -31,6 +31,9 @@ break).
 - `Configurations::learning_rate` (default `0.05`) and
   `Configurations::max_grad_norm` (default `1.0`, `0` = off): gradient
   clipping by global L2 norm.
+- `Configurations::entropy_coef` (default `0.1`): entropy bonus `-β·H(π)`
+  in the loss. It stops the policy from becoming confident on noise or
+  before a weak signal is clear.
 - Exploration schedule: `epsilon_start`/`epsilon_end` (0.3 → 0.05),
   `temperature_start`/`temperature_end` (1.5 → 1.0) and
   `exploration_batches` (500). Inference temperature: `infer_temperature`

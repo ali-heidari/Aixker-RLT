@@ -6,8 +6,8 @@
 //! ```
 //!
 //! Set `TOY_LOG=N` to print the training statistics every N batches, and
-//! `TOY_LR=x` / `TOY_INFER_T=x` to override the default learning rate /
-//! inference temperature.
+//! `TOY_LR=x` / `TOY_INFER_T=x` / `TOY_ENT=x` to override the default
+//! learning rate / inference temperature / entropy coefficient.
 //!
 //! There is no delayed-reward test: the learner is one-step only (no returns
 //! and no bootstrapping), see FINDINGS.md.
@@ -64,6 +64,9 @@ fn run(name: &str, seed: u64, batches: usize, reward: Rc<RewardFn>) -> Eval {
     }
     if let Some(t) = std::env::var("TOY_INFER_T").ok().and_then(|v| v.parse().ok()) {
         cfg.infer_temperature = t;
+    }
+    if let Some(b) = std::env::var("TOY_ENT").ok().and_then(|v| v.parse().ok()) {
+        cfg.entropy_coef = b;
     }
     let node = train(cfg, contexts.clone(), seed + 100, reward);
     evaluate(&node, &contexts, SAMPLES)

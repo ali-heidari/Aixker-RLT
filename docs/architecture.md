@@ -61,7 +61,7 @@ input (f32) → w1 (input_number × hidden_layers) + b1
 - **Training algorithm**: REINFORCE policy gradient on one-step rewards (a contextual bandit learner — no multi-step returns). For each replayed sample the weight is `ρ · A`:
   - `A = (r - batch mean) / batch std` — the batch mean is the baseline, and the std makes updates independent of reward scale.
   - `ρ = min(π(a|s) / b, 2)` — truncated importance weight. `b` is the probability the acting policy gave the action when it was taken (stored in the experience), `π` the current policy.
-  The gradient of `-mean(ρ · A · log π(a|s))` is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
+  The gradient of `-mean(ρ · A · log π(a|s) + β · H(π(·|s)))` (β = `entropy_coef`, H = policy entropy) is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
 - **Checkpoints**: model serialized to JSON (`{w1, b1, w2, b2}` via serde)
 - Learning rate is held in `Node.lr` (`RwLock<f32>`), starts at `learning_rate`, and can be changed at runtime
 
@@ -122,6 +122,7 @@ Provided at startup via `initialize(...)`:
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
 | `seed` (Option<u64>, optional) | Seeds all randomness; `None` = OS entropy (see `src/rng.rs`) |
+| `entropy_coef` (f32, optional) | Entropy bonus β; default 0.1, `0` = off |
 | `epsilon_start` / `epsilon_end` (f32, optional) | Training random-action rate schedule; default 0.3 → 0.05 |
 | `temperature_start` / `temperature_end` (f32, optional) | Training temperature schedule; default 1.5 → 1.0 |
 | `exploration_batches` (u32, optional) | Length of the linear schedule; default 500 |

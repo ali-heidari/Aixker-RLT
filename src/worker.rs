@@ -1,3 +1,4 @@
+use crate::configurations::Configurations;
 use crate::diagnostics::TrainStats;
 use crate::experience::Experience;
 use crate::rng;
@@ -29,12 +30,11 @@ impl Worker {
 
     fn train_on_batch(
         &self,
-        input_number: usize,
-        max_grad_norm: f32,
+        config: &Configurations,
         batch: Vec<Experience>,
         mut model: std::sync::RwLockWriteGuard<'_, Model>,
     ) -> Result<TrainStats> {
-        let mut inputs = Array2::<f32>::zeros((batch.len(), input_number));
+        let mut inputs = Array2::<f32>::zeros((batch.len(), config.input_number));
         let mut predicted_action = Array1::<usize>::zeros(batch.len());
         let mut rewards = Array1::<f32>::zeros(batch.len());
         let mut raw_rewards = Vec::with_capacity(batch.len());
@@ -42,7 +42,7 @@ impl Worker {
 
         for (i, experience) in batch.iter().enumerate() {
             inputs.slice_mut(s![i, ..]).assign(&Array1::from(
-                experience.features[..input_number].to_vec(),
+                experience.features[..config.input_number].to_vec(),
             ));
             predicted_action[i] = experience.action as usize;
             rewards[i] = experience.reward.clamp(-1.0, 1.0);
@@ -57,7 +57,8 @@ impl Worker {
             &rewards,
             &behavior_probs,
             self.learning_rate,
-            max_grad_norm,
+            config.max_grad_norm,
+            config.entropy_coef,
         );
         (stats.reward_mean, stats.reward_std) = TrainStats::mean_std(&raw_rewards);
 
@@ -87,7 +88,7 @@ impl Worker {
         drop(buffer);
 
         let model = node.model.write().unwrap();
-        let stats = self.train_on_batch(node.config().input_number, node.config().max_grad_norm, batch, model).unwrap();
+        let stats = self.train_on_batch(node.config(), batch, model).unwrap();
         let size = node.batch_history.read().unwrap().len();
 
         node.record_stats(size as u32 + 1, stats);
@@ -123,7 +124,7 @@ impl Worker {
             drop(buffer);
 
             let model = node.model.write().unwrap();
-            let stats = self.train_on_batch(node.config().input_number, node.config().max_grad_norm, batch, model).unwrap();
+            let stats = self.train_on_batch(node.config(), batch, model).unwrap();
             node.record_stats(batch_counter, stats);
         }
         Ok(())

@@ -168,6 +168,7 @@ impl Model {
         behavior_probs: &Array1<f32>,
         lr: f32,
         max_grad_norm: f32,
+        entropy_coef: f32,
     ) -> TrainStats {
         let probs = Self::softmax2(&self.forward(x), 1.0);
         let advantages = Self::normalized_advantages(rewards);
@@ -181,7 +182,7 @@ impl Model {
             rho * advantages[i]
         }));
 
-        let mut grads = self.policy_gradient(x, &probs, actions, &weights);
+        let mut grads = self.policy_gradient(x, &probs, actions, &weights, entropy_coef);
         let stats = Self::batch_stats(&probs, actions, &weights, &grads);
         grads.clip_norm(max_grad_norm);
         self.apply_gradients(&grads, lr);
@@ -199,21 +200,32 @@ impl Model {
         rewards.mapv(|r| (r - mean) / (std + 1e-8))
     }
 
-    /// Gradient of `L = -mean_i(w_i · log π(a_i|s_i))` with respect to every
-    /// weight, given the policy `probs` (temperature 1) for `x`.
+    /// Gradient of `L = -mean_i(w_i · log π(a_i|s_i) + β · H(π(·|s_i)))`
+    /// with respect to every weight, given the policy `probs` (temperature 1)
+    /// for `x` and the entropy coefficient `β`.
     fn policy_gradient(
         &self,
         x: &Array2<f32>,
         probs: &Array2<f32>,
         actions: &Array1<usize>,
         weights: &Array1<f32>,
+        entropy_coef: f32,
     ) -> Grads {
-        // dL/dz_i = -w_i · (onehot(a_i) - p_i) / n, for every action.
         let n = x.nrows().max(1) as f32;
         let mut grad_logits = probs.clone();
         for (i, &a) in actions.iter().enumerate() {
+            // Policy term: -w_i · (onehot(a_i) - p_i) / n.
             grad_logits[[i, a]] -= 1.0;
             grad_logits.row_mut(i).mapv_inplace(|g| g * weights[i] / n);
+            // Entropy term: dH/dz_j = -p_j · (log p_j + H), so
+            // d(-βH)/dz_j = β · p_j · (log p_j + H) / n.
+            if entropy_coef > 0.0 {
+                let row = probs.row(i);
+                let h = TrainStats::entropy_of(row.as_slice().unwrap());
+                for (j, &p) in row.iter().enumerate() {
+                    grad_logits[[i, j]] += entropy_coef * p * (p.max(1e-12).ln() + h) / n;
+                }
+            }
         }
         self.backward(x, &grad_logits)
     }
@@ -346,13 +358,18 @@ mod tests {
         model
     }
 
+    const BETA: f32 = 0.2;
+
     fn loss(model: &Model, x: &Array2<f32>, actions: &Array1<usize>, rewards: &Array1<f32>) -> f64 {
         let probs = Model::softmax2(&model.forward(x), 1.0);
         let n = x.nrows() as f64;
         actions
             .iter()
             .enumerate()
-            .map(|(i, &a)| -(rewards[i] as f64) * (probs[[i, a]] as f64).ln())
+            .map(|(i, &a)| {
+                let entropy: f64 = probs.row(i).iter().map(|&p| -(p as f64) * (p as f64).ln()).sum();
+                -(rewards[i] as f64) * (probs[[i, a]] as f64).ln() - BETA as f64 * entropy
+            })
             .sum::<f64>()
             / n
     }
@@ -368,7 +385,7 @@ mod tests {
         let actions = Array1::from_vec(vec![0, 2, 1, 2]);
         let rewards = Array1::from_vec(vec![1.0, -0.5, 0.3, 0.8]);
         let probs = Model::softmax2(&model.forward(&x), 1.0);
-        let grads = model.policy_gradient(&x, &probs, &actions, &rewards);
+        let grads = model.policy_gradient(&x, &probs, &actions, &rewards, BETA);
 
         let eps = 1e-2f32;
         let check = |analytic: f32, model_plus: &Model, model_minus: &Model| {
@@ -404,12 +421,12 @@ mod tests {
         let a2 = ndarray::concatenate(Axis(0), &[actions.view(), actions.view()]).unwrap();
         let r2 = ndarray::concatenate(Axis(0), &[rewards.view(), rewards.view()]).unwrap();
         let probs2 = Model::softmax2(&model.forward(&x2), 1.0);
-        let grads2 = model.policy_gradient(&x2, &probs2, &a2, &r2);
+        let grads2 = model.policy_gradient(&x2, &probs2, &a2, &r2, BETA);
         assert!((grads.norm() - grads2.norm()).abs() < 1e-5);
 
         // lr = 0 leaves the weights alone.
         let before = model.parameters();
-        model.reinforce(&x, &actions, &rewards, &Array1::zeros(4), 0.0, 1.0);
+        model.reinforce(&x, &actions, &rewards, &Array1::zeros(4), 0.0, 1.0, BETA);
         assert_eq!(before, model.parameters());
     }
 
@@ -427,7 +444,7 @@ mod tests {
         let (x, actions, _) = batch();
         let mut model = tiny_model();
         let before = model.parameters();
-        model.reinforce(&x, &actions, rewards, behavior, 0.1, 0.0);
+        model.reinforce(&x, &actions, rewards, behavior, 0.1, 0.0, 0.0);
         model.parameters().iter().zip(before).map(|(a, b)| a - b).collect()
     }
 

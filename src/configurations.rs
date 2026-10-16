@@ -46,6 +46,11 @@ pub struct Configurations {
     /// `0` disables clipping.
     #[serde(default = "default_max_grad_norm")]
     pub max_grad_norm: f32,
+    /// Weight of the entropy bonus: the loss gets `-entropy_coef · H(π)`,
+    /// which keeps the policy from becoming confident before the reward
+    /// signal supports it. `0` disables it.
+    #[serde(default = "default_entropy_coef")]
+    pub entropy_coef: f32,
     /// Random-action rate (ε) at the start of training.
     #[serde(default = "default_epsilon_start")]
     pub epsilon_start: f32,
@@ -67,6 +72,10 @@ pub struct Configurations {
     /// action (greedy).
     #[serde(default = "default_infer_temperature")]
     pub infer_temperature: f32,
+}
+
+fn default_entropy_coef() -> f32 {
+    0.1
 }
 
 fn default_epsilon_start() -> f32 {
@@ -138,6 +147,7 @@ impl Default for Configurations {
             reward_shaping: false,
             learning_rate: default_learning_rate(),
             max_grad_norm: default_max_grad_norm(),
+            entropy_coef: default_entropy_coef(),
             epsilon_start: default_epsilon_start(),
             epsilon_end: default_epsilon_end(),
             temperature_start: default_temperature_start(),
