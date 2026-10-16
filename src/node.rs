@@ -218,6 +218,13 @@ impl Node {
                 break;
             }
         }
+        // The per-batch save runs on the step after a batch, so the last
+        // batch would otherwise never reach the checkpoint.
+        if node.mode != RunningMode::Infer {
+            if let Err(e) = node.model.read().unwrap().save_model() {
+                warn!("failed to save the final checkpoint: {e}");
+            }
+        }
         node
     }
 

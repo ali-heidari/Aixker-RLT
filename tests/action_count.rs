@@ -28,8 +28,14 @@ fn train_with_actions(output_number: usize) {
         RunningMode::Training,
         "test",
     ));
+    let saved = std::fs::read_to_string(&path).expect("final checkpoint is written");
     let _ = std::fs::remove_file(&path);
     assert!(node.batch_history.read().unwrap().len() > 3);
+    // The checkpoint holds the final weights, not the ones from a batch earlier.
+    let saved: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    let b2: Vec<f32> = serde_json::from_value(saved["b2"]["data"].clone()).unwrap();
+    let w = node.weights();
+    assert_eq!(&w[w.len() - output_number..], b2.as_slice());
 }
 
 #[test]
