@@ -58,7 +58,10 @@ input (f32) → w1 (input_number × hidden_layers) + b1
            → action probabilities
 ```
 
-- **Training algorithm**: REINFORCE policy gradient on one-step rewards. The gradient is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
+- **Training algorithm**: REINFORCE policy gradient on one-step rewards (a contextual bandit learner — no multi-step returns). For each replayed sample the weight is `ρ · A`:
+  - `A = (r - batch mean) / batch std` — the batch mean is the baseline, and the std makes updates independent of reward scale.
+  - `ρ = min(π(a|s) / b, 2)` — truncated importance weight. `b` is the probability the acting policy gave the action when it was taken (stored in the experience), `π` the current policy.
+  The gradient of `-mean(ρ · A · log π(a|s))` is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
 - **Checkpoints**: model serialized to JSON (`{w1, b1, w2, b2}` via serde)
 - Learning rate is held in `Node.lr` (`RwLock<f32>`), starts at `learning_rate`, and can be changed at runtime
 

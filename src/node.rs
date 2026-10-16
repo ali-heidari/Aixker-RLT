@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 
 use crate::{
-    experience::Experience, infer_action::infer_action, model::Model, reply_buffer::ReplayBuffer,
+    experience::Experience, infer_action::select_action, model::Model, reply_buffer::ReplayBuffer,
     worker::Worker,
 };
 use std::{
@@ -536,7 +536,8 @@ impl Node {
     ) where
         F: Fn(&Vec<f32>, u32, u32) -> (f32, bool),
     {
-        let (action, logits, probs) = infer_action(self, &inputs);
+        let selection = select_action(self, &inputs);
+        let (action, logits, probs) = (selection.action, selection.logits, selection.probs);
         let (reward, success) = compute_reward_with_success(
             &inputs,
             action as u32,
@@ -555,6 +556,7 @@ impl Node {
             latency_ms: 0.0, //*inputs.get(5).unwrap(),
             reward: adjusted_reward,
             raw_reward: reward,
+            behavior_prob: selection.behavior_prob,
             success,
             timestamp_ms: Instant::now().elapsed().as_millis(),
         };

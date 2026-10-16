@@ -172,6 +172,16 @@ Configuration is provided at startup via `initialize(...)` with a `Configuration
 `Configurations` implements `Default`, so in Rust you only need to set what
 you change: `Configurations { input_number: 8, output_number: 3, ..Default::default() }`.
 
+### How it learns
+
+The learner is a one-step policy gradient (REINFORCE for contextual
+bandits): each action is scored by the reward returned for it, with no
+multi-step returns. Per batch, rewards are turned into advantages
+(`(r - batch mean) / batch std`), so only *relative* reward matters and the
+reward scale does not change the step size. Replayed experiences are
+reweighted by `min(π(a|s) / b, 2)` toward the current policy, where `b` is
+the probability the action had when it was taken.
+
 ### Reproducible runs
 
 Set `seed = 42` (any `u64`) to make a run repeatable. Each source of

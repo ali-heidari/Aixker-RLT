@@ -5,8 +5,27 @@ use ndarray::{Array, Array2};
 use rand::distributions::{Distribution, WeightedIndex};
 use rand::Rng;
 
+/// One chosen action and how it was chosen.
+pub(crate) struct Selection {
+    pub action: usize,
+    /// Logits shifted so the largest is 0.
+    pub logits: Array2<f32>,
+    /// Softmax of the logits at the sampling temperature.
+    pub probs: Vec<f32>,
+    /// Probability that this selection rule picks `action`, including the
+    /// ε-random part. Stored with the experience for off-policy correction.
+    pub behavior_prob: f32,
+}
+
+/// Pick an action for `features` and return it with its logits and
+/// probabilities.
 pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Vec<f32>) {
-    let x = Array2::from_shape_vec((1, node.config().input_number), features.clone()).unwrap();
+    let s = select_action(node, features);
+    (s.action, s.logits, s.probs)
+}
+
+pub(crate) fn select_action(node: &Node, features: &[f32]) -> Selection {
+    let x = Array2::from_shape_vec((1, node.config().input_number), features.to_vec()).unwrap();
     let model = node.model.read().unwrap();
     let logits = model.forward(&x);
     let num_actions = logits.len();
@@ -18,7 +37,7 @@ pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Ve
         .collect();
     let logits = Array::from_shape_vec((1,num_actions), logits).unwrap();
 
-    let temperature = node.temperature.write().unwrap().clone();
+    let temperature = *node.temperature.read().unwrap();
     let mut probs = Model::softmax(&logits, temperature);
     // 4) Numerical safety: clamp and normalize
     for p in probs.iter_mut() {
@@ -36,7 +55,7 @@ pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Ve
     }
 
     // 5) Epsilon-greedy exploration
-    let eps: f32 = node.epsilon.write().unwrap().clone();
+    let eps: f32 = *node.epsilon.read().unwrap();
     let mut rng = node.rng.lock().unwrap();
     let action = if rng.gen::<f32>() < eps {
         rng.gen_range(0..probs.len())
@@ -45,5 +64,13 @@ pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Ve
         dist.sample(&mut *rng)
     };
 
-    (action, logits, probs)
+    let n = probs.len() as f32;
+    let behavior_prob = eps / n + (1.0 - eps) * probs[action];
+
+    Selection {
+        action,
+        logits,
+        probs,
+        behavior_prob,
+    }
 }

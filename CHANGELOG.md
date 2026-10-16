@@ -39,6 +39,13 @@ break).
   constant from the config (default `0.05`). Before, it was hard-coded to
   `1e-5` with summed gradients (effectively `6.4e-4` per sample) and decayed
   toward `1e-6` by a rule that ran on every step.
+- **Breaking (behavior):** the policy gradient trains on normalized
+  advantages, `(r - batch mean) / batch std`, instead of the raw reward.
+  Only relative rewards within a batch matter now, and adding a constant
+  to every reward changes nothing.
+- **Fix:** replayed experiences are reweighted by a truncated importance
+  weight `min(π(a|s) / b, 2)`. Before, old and ε-random actions were
+  trained on as if the current policy had chosen them.
 - **Fix:** the policy gradient now uses the full softmax gradient
   `-r·(onehot(a) - π)`. Before, only the chosen action's term was applied,
   so the update was not the gradient of any loss.

@@ -38,6 +38,7 @@ impl Worker {
         let mut predicted_action = Array1::<usize>::zeros(batch.len());
         let mut rewards = Array1::<f32>::zeros(batch.len());
         let mut raw_rewards = Vec::with_capacity(batch.len());
+        let mut behavior_probs = Array1::<f32>::zeros(batch.len());
 
         for (i, experience) in batch.iter().enumerate() {
             inputs.slice_mut(s![i, ..]).assign(&Array1::from(
@@ -46,6 +47,7 @@ impl Worker {
             predicted_action[i] = experience.action as usize;
             rewards[i] = experience.reward.clamp(-1.0, 1.0);
             raw_rewards.push(experience.raw_reward);
+            behavior_probs[i] = experience.behavior_prob;
         }
 
         //  let loss = model.backward(&x, &y, 0.01);
@@ -53,6 +55,7 @@ impl Worker {
             &inputs,
             &predicted_action,
             &rewards,
+            &behavior_probs,
             self.learning_rate,
             max_grad_norm,
         );

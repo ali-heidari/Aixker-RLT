@@ -13,6 +13,11 @@ use std::io::Write;
 use std::sync::Arc;
 use std::u8;
 
+/// Cap on the importance weight π/b of a replayed sample. Truncating keeps
+/// one stale, unlikely sample from dominating a batch, at the cost of a
+/// small bias toward the behavior policy.
+const MAX_IMPORTANCE_WEIGHT: f32 = 2.0;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Model {
     w1: Array2<f32>,
@@ -143,18 +148,41 @@ impl Model {
         exps
     }
 
-    /// One policy-gradient step on a batch. Returns the batch statistics
-    /// that depend on the model (loss, gradient norm, policy, entropy).
+    /// One policy-gradient step on a batch of replayed experiences. Returns
+    /// the batch statistics that depend on the model (loss, gradient norm,
+    /// policy, entropy).
+    ///
+    /// Each sample's weight is `ρ_i · A_i`:
+    /// - `A_i = (r_i - mean(r)) / std(r)` over the batch: the batch mean is the
+    ///   baseline, and dividing by the std makes the step size independent of
+    ///   the reward scale.
+    /// - `ρ_i = min(π(a_i|s_i) / b_i, MAX_IMPORTANCE_WEIGHT)`: replayed actions
+    ///   were chosen by an older, exploring policy with probability `b_i`, so
+    ///   they are reweighted toward the current policy (truncated importance
+    ///   sampling). `b_i = 0` means unknown and gives `ρ_i = 1`.
     pub fn reinforce(
         &mut self,
         x: &Array2<f32>,
         actions: &Array1<usize>,
         rewards: &Array1<f32>,
+        behavior_probs: &Array1<f32>,
         lr: f32,
         max_grad_norm: f32,
     ) -> TrainStats {
-        let (probs, mut grads) = self.policy_gradient(x, actions, rewards);
-        let stats = Self::batch_stats(&probs, actions, rewards, &grads);
+        let probs = Self::softmax2(&self.forward(x), 1.0);
+        let advantages = Self::normalized_advantages(rewards);
+        let weights = Array1::from_iter(actions.iter().enumerate().map(|(i, &a)| {
+            let b = behavior_probs[i];
+            let rho = if b > 0.0 {
+                (probs[[i, a]] / b).min(MAX_IMPORTANCE_WEIGHT)
+            } else {
+                1.0
+            };
+            rho * advantages[i]
+        }));
+
+        let mut grads = self.policy_gradient(x, &probs, actions, &weights);
+        let stats = Self::batch_stats(&probs, actions, &weights, &grads);
         grads.clip_norm(max_grad_norm);
         self.apply_gradients(&grads, lr);
 
@@ -164,41 +192,45 @@ impl Model {
         stats
     }
 
-    /// Policy probabilities (temperature 1) and the gradient of
-    /// `L = -mean_i(r_i · log π(a_i|s_i))` with respect to every weight.
+    /// `(r - mean) / std` over the batch; all zeros when every reward is the
+    /// same.
+    fn normalized_advantages(rewards: &Array1<f32>) -> Array1<f32> {
+        let (mean, std) = TrainStats::mean_std(&rewards.to_vec());
+        rewards.mapv(|r| (r - mean) / (std + 1e-8))
+    }
+
+    /// Gradient of `L = -mean_i(w_i · log π(a_i|s_i))` with respect to every
+    /// weight, given the policy `probs` (temperature 1) for `x`.
     fn policy_gradient(
         &self,
         x: &Array2<f32>,
+        probs: &Array2<f32>,
         actions: &Array1<usize>,
-        rewards: &Array1<f32>,
-    ) -> (Array2<f32>, Grads) {
-        let logits = self.forward(x);
-        let probs = Self::softmax2(&logits, 1.0);
-
-        // dL/dz_i = -r_i · (onehot(a_i) - p_i) / n, for every action.
+        weights: &Array1<f32>,
+    ) -> Grads {
+        // dL/dz_i = -w_i · (onehot(a_i) - p_i) / n, for every action.
         let n = x.nrows().max(1) as f32;
         let mut grad_logits = probs.clone();
         for (i, &a) in actions.iter().enumerate() {
             grad_logits[[i, a]] -= 1.0;
-            grad_logits.row_mut(i).mapv_inplace(|g| g * rewards[i] / n);
+            grad_logits.row_mut(i).mapv_inplace(|g| g * weights[i] / n);
         }
-        let grads = self.backward(x, &grad_logits);
-        (probs, grads)
+        self.backward(x, &grad_logits)
     }
 
-    /// Model-side statistics of one batch. `loss` is the REINFORCE loss
-    /// `-mean(r_i · log π(a_i|s_i))`.
+    /// Model-side statistics of one batch. `loss` is the policy-gradient
+    /// loss `-mean(w_i · log π(a_i|s_i))` with the per-sample weights `w_i`.
     fn batch_stats(
         probs: &Array2<f32>,
         actions: &Array1<usize>,
-        rewards: &Array1<f32>,
+        weights: &Array1<f32>,
         grads: &Grads,
     ) -> TrainStats {
         let n = probs.nrows().max(1) as f32;
         let loss = actions
             .iter()
             .enumerate()
-            .map(|(i, &a)| -rewards[i] * probs[[i, a]].max(1e-12).ln())
+            .map(|(i, &a)| -weights[i] * probs[[i, a]].max(1e-12).ln())
             .sum::<f32>()
             / n;
         let entropy = probs
@@ -335,7 +367,8 @@ mod tests {
         .unwrap();
         let actions = Array1::from_vec(vec![0, 2, 1, 2]);
         let rewards = Array1::from_vec(vec![1.0, -0.5, 0.3, 0.8]);
-        let (_, grads) = model.policy_gradient(&x, &actions, &rewards);
+        let probs = Model::softmax2(&model.forward(&x), 1.0);
+        let grads = model.policy_gradient(&x, &probs, &actions, &rewards);
 
         let eps = 1e-2f32;
         let check = |analytic: f32, model_plus: &Model, model_minus: &Model| {
@@ -370,13 +403,65 @@ mod tests {
         let x2 = ndarray::concatenate(Axis(0), &[x.view(), x.view()]).unwrap();
         let a2 = ndarray::concatenate(Axis(0), &[actions.view(), actions.view()]).unwrap();
         let r2 = ndarray::concatenate(Axis(0), &[rewards.view(), rewards.view()]).unwrap();
-        let (_, grads2) = model.policy_gradient(&x2, &a2, &r2);
+        let probs2 = Model::softmax2(&model.forward(&x2), 1.0);
+        let grads2 = model.policy_gradient(&x2, &probs2, &a2, &r2);
         assert!((grads.norm() - grads2.norm()).abs() < 1e-5);
 
         // lr = 0 leaves the weights alone.
         let before = model.parameters();
-        model.reinforce(&x, &actions, &rewards, 0.0, 1.0);
+        model.reinforce(&x, &actions, &rewards, &Array1::zeros(4), 0.0, 1.0);
         assert_eq!(before, model.parameters());
+    }
+
+    fn batch() -> (Array2<f32>, Array1<usize>, Array1<f32>) {
+        let x = Array2::from_shape_vec(
+            (4, 3),
+            vec![0.5, -0.3, 0.8, -0.6, 0.2, 0.1, 0.9, 0.4, -0.7, 0.3, -0.8, 0.5],
+        )
+        .unwrap();
+        (x, Array1::from_vec(vec![0, 2, 1, 2]), Array1::from_vec(vec![1.0, -0.5, 0.3, 0.8]))
+    }
+
+    /// Weight change after one step.
+    fn step(rewards: &Array1<f32>, behavior: &Array1<f32>) -> Vec<f32> {
+        let (x, actions, _) = batch();
+        let mut model = tiny_model();
+        let before = model.parameters();
+        model.reinforce(&x, &actions, rewards, behavior, 0.1, 0.0);
+        model.parameters().iter().zip(before).map(|(a, b)| a - b).collect()
+    }
+
+    #[test]
+    fn update_ignores_reward_scale_and_offset() {
+        let (_, _, rewards) = batch();
+        let unknown = Array1::zeros(4);
+        let base = step(&rewards, &unknown);
+        let small = step(&rewards.mapv(|r| r * 0.002 - 0.01), &unknown);
+        for (a, b) in base.iter().zip(&small) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
+        assert!(base.iter().any(|d| d.abs() > 1e-4), "the step must do something");
+
+        let flat = step(&Array1::from_elem(4, 0.7), &unknown);
+        assert!(flat.iter().all(|&d| d == 0.0), "equal rewards carry no signal");
+    }
+
+    #[test]
+    fn importance_weights_are_truncated() {
+        let (x, actions, rewards) = batch();
+        let probs = Model::softmax2(&tiny_model().forward(&x), 1.0);
+        let pi: Vec<f32> = actions.iter().enumerate().map(|(i, &a)| probs[[i, a]]).collect();
+        // b = π gives ρ = 1 (on-policy); identical to "unknown".
+        let on_policy = step(&rewards, &Array1::from_vec(pi.clone()));
+        let unknown = step(&rewards, &Array1::zeros(4));
+        for (a, b) in on_policy.iter().zip(&unknown) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        // b → 0 would give a huge ρ; it is capped at MAX_IMPORTANCE_WEIGHT.
+        let rare = step(&rewards, &Array1::from_elem(4, 1e-6));
+        for (a, b) in rare.iter().zip(&unknown) {
+            assert!((a - MAX_IMPORTANCE_WEIGHT * b).abs() < 1e-5, "{a} vs {b}");
+        }
     }
 
     #[test]

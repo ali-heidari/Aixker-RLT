@@ -223,6 +223,7 @@ Budgets: bandit 1,500 batches, small-signal 4,000, null 3,000.
 | Before fixes | 0.487 / 0.494 / 0.500 ✗ | 0.354 / 0.305 / 0.327 ✗ | 0.352, 1.099 / 0.360, 1.099 / 0.338, 1.099 ✓ | 1 / 3 |
 | Fix 1: shaping off | 0.477 / 0.487 / 0.504 ✗ | 0.348 / 0.297 / 0.323 ✗ | 0.350, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 1 / 3 |
 | Fix 2: averaged + clipped gradients, lr 0.05 | 0.995 / 0.994 / 0.988 ✓ | 0.357 / 0.311 / 0.329 ✗ | 0.353, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 2 / 3 |
+| Fix 3: normalized advantage + importance weights | 0.989 / 0.995 / 0.991 ✓ | 0.991 / 0.986 / 0.993 ✓ | 0.563, 1.073 / 0.538, 1.080 / 0.578, 1.047 ✗ | 2 / 3 |
 
 Before fixes:
 
@@ -249,4 +250,27 @@ Fix 2 learning-rate sweep (same suite, only `learning_rate` changed):
   normalization (fix 3), not by a bigger step.
 - At 0.2, small-signal starts drifting toward one action (0.46-0.48 of
   calls) without learning the right one: the missing baseline at work.
+
+Fix 3 notes:
+
+- **What was fixed.** The learner is a policy gradient, so it now uses an
+  advantage instead of the raw reward: `A = (r - batch mean) / batch std`.
+  The batch mean is the baseline. Dividing by the std makes the step size
+  independent of the reward scale, so ±0.002 rewards move the policy as
+  much as ±1 rewards do.
+- **Why no running mean or value head.** Centering per batch already
+  subtracts a baseline, so a separate running mean would be cancelled by
+  it. A learned value head would change the checkpoint format and the GPU
+  backward pass. It isn't clean in this code, so it's left as a follow-up.
+- **Off-policy fix.** Each experience now stores `b`, the probability the
+  acting rule gave its action (ε mix and sampling temperature included).
+  Training weights each sample by `ρ = min(π(a|s) / b, 2)`, where `π` is the
+  current policy. This is truncated importance sampling: replayed and
+  exploratory actions are reweighted toward what the current policy would
+  do, and the cap of 2 stops one rare sample from dominating a batch.
+- **New failure: null.** The policy itself stays close to uniform
+  (entropy 1.05-1.08, above the 0.989 bar). But the old inference rule
+  (sampling at T = 0.5, plus ε) sharpens its small, noise-driven tilt past
+  50% for one action. Scale-free learning means pure noise now moves the
+  policy a little. Fix 4 changes inference, so this is checked again there.
 
