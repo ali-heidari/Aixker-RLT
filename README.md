@@ -72,6 +72,20 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
+### One configuration per node
+
+`initialize()` sets one process-wide configuration and can only be called
+once. To run several agents with different configurations in one process
+(or in tests), pass the configuration to the node instead:
+
+```rust
+let config = Arc::new(Configurations { /* ... */ });
+let node = Node::start_with_config(config, input_bearer, reward_fn, RunningMode::Training, "my-model.json").await;
+// `node` is returned when the loop ends, e.g. to call `infer_action(&node, &features)`.
+```
+
+`Node::new_with_config` does the same for a node you drive yourself.
+
 ### Running modes
 
 `Node::start` takes a `RunningMode`:

@@ -42,6 +42,8 @@ Node::start(
 ).await;
 ```
 
+`Node::start_with_config(config, ...)` and `Node::new_with_config(config, ...)` take an `Arc<Configurations>` instead of reading the global one set by `initialize()`. Each node keeps its own configuration (`node.config()`), so several differently configured nodes can share a process. `start_with_config` returns the node when its loop ends.
+
 All shared state uses `Arc<RwLock<T>>`: reader threads (inference) don't block each other, the writer thread (training) gets exclusive access when updating.
 
 ## Model (`model.rs`)

@@ -1,4 +1,3 @@
-use crate::get_config as CONFIG;
 use crate::model::Model;
 
 use super::node::Node;
@@ -9,7 +8,7 @@ use rand::Rng;
 pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Vec<f32>) {
     let mut rng = rand::thread_rng();
 
-    let x = Array2::from_shape_vec((1, CONFIG().input_number), features.clone()).unwrap();
+    let x = Array2::from_shape_vec((1, node.config().input_number), features.clone()).unwrap();
     let model = node.model.read().unwrap();
     let logits = model.forward(&x);
     let num_actions = logits.len();

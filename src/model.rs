@@ -1,5 +1,5 @@
 use crate::diagnostics::TrainStats;
-use crate::get_config as CONFIG;
+use crate::configurations::Configurations;
 use crate::models::gpu_model::{GpuModel, Grads};
 use anyhow::Ok;
 use log::{info, warn};
@@ -7,7 +7,7 @@ use ndarray::{Array1, Array2, Axis};
 use ndarray_rand::rand::distributions::Uniform;
 use ndarray_rand::RandomExt;
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Write;
 use std::sync::Arc;
 use std::u8;
@@ -20,6 +20,9 @@ pub struct Model {
     b2: Array1<f32>,
     pub snapshot: String,
     id: String,
+    /// Checkpoint file path. Not serialized.
+    #[serde(skip)]
+    path: String,
     /// GPU backend, enabled via `Configurations::backend = Gpu`.
     /// Not serialized; checkpoints stay backend-agnostic.
     #[serde(skip)]
@@ -27,46 +30,49 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn new(id: &str) -> Self {
+    /// A freshly initialized model for checkpoint `id`.
+    pub fn new(id: &str, config: &Configurations) -> Self {
         let mut rng = rand::thread_rng();
         let uniform = Uniform::new(-0.1, 0.1);
-        let this = Self {
+        Self {
             w1: Array2::random_using(
-                (CONFIG().input_number, CONFIG().hidden_layers),
+                (config.input_number, config.hidden_layers),
                 uniform,
                 &mut rng,
             ),
-            b1: Array1::zeros(CONFIG().hidden_layers),
+            b1: Array1::zeros(config.hidden_layers),
             w2: Array2::random_using(
-                (CONFIG().hidden_layers, CONFIG().output_number),
+                (config.hidden_layers, config.output_number),
                 uniform,
                 &mut rng,
             ),
-            b2: Array1::zeros(CONFIG().output_number),
+            b2: Array1::zeros(config.output_number),
             snapshot: String::new(),
             id: id.to_owned(),
+            path: Self::model_path(id, config),
             gpu: None,
-        };
+        }
+    }
 
-        OpenOptions::new()
-            .write(true)
-            .create(true) // Creates if not exists
-            .open(this.model_path())
-            .ok();
-
-        this
+    /// Load checkpoint `id` if it exists and parses; otherwise start fresh.
+    pub fn load_or_new(id: &str, config: &Configurations) -> Self {
+        let path = Self::model_path(id, config);
+        let loaded = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|data| serde_json::from_str::<Model>(&data.replace("null", "0.0")).ok());
+        match loaded {
+            Some(mut model) => {
+                model.path = path;
+                model
+            }
+            None => Self::new(id, config),
+        }
     }
 
     /// Enable the GPU compute backend. Falls back to CPU (with a warning)
     /// when no compatible adapter is available.
-    pub fn enable_gpu(&mut self) {
-        match GpuModel::new(
-            &self.w1,
-            &self.b1,
-            &self.w2,
-            &self.b2,
-            CONFIG().batch_size.max(1) as usize,
-        ) {
+    pub fn enable_gpu(&mut self, max_batch: usize) {
+        match GpuModel::new(&self.w1, &self.b1, &self.w2, &self.b2, max_batch.max(1)) {
             std::result::Result::Ok(gpu) => {
                 info!("model '{}' running on the GPU backend", self.id);
                 self.gpu = Some(Arc::new(gpu));
@@ -218,28 +224,19 @@ impl Model {
         }
     }
 
-    fn model_path(&self) -> String {
+    fn model_path(id: &str, config: &Configurations) -> String {
         let dir = "./models";
         if let Err(err) = std::fs::create_dir_all(dir) {
             warn!("Failed to create model directory '{}': {}", dir, err);
         }
-        format!("{}/{}.{}", dir, self.id, CONFIG().model_name)
+        format!("{}/{}.{}", dir, id, config.model_name)
     }
 
     pub fn save_model(&self) -> anyhow::Result<()> {
         let json = serde_json::to_string(self)?;
-        let mut file = File::create(self.model_path())?;
+        let mut file = File::create(&self.path)?;
         file.write_all(json.as_bytes())?;
         Ok(())
-    }
-
-    pub fn load_model(&self) -> anyhow::Result<Model> {
-        let data = std::fs::read_to_string(self.model_path())?.replace("null", "0.0");
-        let model = match serde_json::from_str(&data) {
-            std::result::Result::Ok(m) => m,
-            Err(_) => Model::new(&self.id),
-        };
-        Ok(model)
     }
 
     pub fn sanitize(&mut self) {

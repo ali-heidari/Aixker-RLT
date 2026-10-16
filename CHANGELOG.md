@@ -14,6 +14,12 @@ break).
   action distribution and its entropy at `info` level. The same values are
   stored in `Node::last_stats` as a public `TrainStats`.
 
+- `Node::new_with_config` and `Node::start_with_config` take an
+  `Arc<Configurations>` directly, so several nodes with different
+  configurations can run in one process. `start_with_config` returns the
+  node when its loop ends. `Node::config()` returns a node's configuration.
+  `initialize()` + `Node::start` work as before.
+
 ### Changed
 
 - `log_interval` is now used: it is the number of batches between
@@ -24,3 +30,6 @@ break).
 - The GPU backend now runs only the forward pass and backpropagation; the
   loss gradient and the SGD step run on the CPU for both backends. The
   `softmax`, `reinforce` and `weight-update` shaders were removed.
+- A missing or unreadable checkpoint no longer creates an empty file at
+  startup; the node starts with fresh weights and writes the file on its
+  first save.
