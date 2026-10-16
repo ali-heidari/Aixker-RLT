@@ -165,6 +165,7 @@ Configuration is provided at startup via `initialize(...)` with a `Configuration
 | `mode` | `RunningMode` (`Training`, `TrainingWithInterval`, `Infer`) |
 | `backend` | Optional `ComputeBackend` (`Cpu` default, `Gpu`) |
 | `seed` | Optional `u64`. Seeds weight init, exploration, action sampling and replay sampling. Unset = fresh randomness each run. See [Reproducible runs](#reproducible-runs). |
+| `reward_shaping` | Optional `bool`, default `false`. Rewrites rewards with a built-in bonus/penalty based on per-action success rates and frequencies. The penalty is up to about 0.5, so leave it off unless your rewards are on the order of ±1. |
 
 `Configurations` implements `Default`, so in Rust you only need to set what
 you change: `Configurations { input_number: 8, output_number: 3, ..Default::default() }`.

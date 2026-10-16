@@ -32,6 +32,12 @@ pub struct Configurations {
     /// entropy, so runs differ.
     #[serde(default)]
     pub seed: Option<u64>,
+    /// Rewrite rewards with the built-in shaping (bonus for rare successful
+    /// actions, penalty of up to ~0.5 for failed or over-used ones). Off by
+    /// default: the learner trains on the raw reward. Only enable it when
+    /// your rewards are on the order of ±1.
+    #[serde(default)]
+    pub reward_shaping: bool,
 }
 
 impl Default for Configurations {
@@ -52,6 +58,7 @@ impl Default for Configurations {
             mode: RunningMode::Training,
             backend: ComputeBackend::Cpu,
             seed: None,
+            reward_shaping: false,
         }
     }
 }

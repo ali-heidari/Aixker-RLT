@@ -497,6 +497,9 @@ impl Node {
         *self.stuck.write().unwrap() = stuck_flag;
     }
 
+    /// Update the per-action statistics (`diverging`, `stuck`) and return
+    /// the reward to train on: the raw reward, or the shaped one when
+    /// `Configurations::reward_shaping` is on.
     fn adjust_settings(&self, action: usize, reward: f32, success: bool) -> f32 {
         let action_details_guard = self.action_details.read().unwrap();
         if action_details_guard.len() <= action {
@@ -514,6 +517,10 @@ impl Node {
         if self.batch_history.read().unwrap().len().is_multiple_of(50) {
             self.detect_stuck(&success_rates);
             self.adjust_lr(!*self.stuck.read().unwrap() || *self.diverging.read().unwrap());
+        }
+
+        if !self.config.reward_shaping {
+            return reward;
         }
 
         if variance_action_ratios <= 0.01
@@ -591,5 +598,50 @@ impl Node {
             );
             *self.batch_sampled.write().unwrap() = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::SeedableRng;
+
+    /// Stored training rewards after 1,000 steps that all return
+    /// `(0.001, false)`.
+    fn stored_rewards(reward_shaping: bool, name: &str) -> Vec<f32> {
+        let config = Arc::new(Configurations {
+            input_number: 2,
+            output_number: 3,
+            reply_capacity: 1_000,
+            model_name: name.to_owned(),
+            seed: Some(1),
+            reward_shaping,
+            ..Default::default()
+        });
+        let node = Arc::new(Node::new_with_config(config, 0.5, 1.0, RunningMode::Training, "test"));
+        Node::set_default_factors(&node, RunningMode::Training);
+        // Pretend 300 batches ran, so shaping is active whatever the stats.
+        for b in 1..=300 {
+            node.batch_history.write().unwrap().insert(b, 0.0);
+        }
+        let mut math = ContinuousMath::new();
+        for i in 0..1_000 {
+            node.next(vec![i as f32 % 3.0, 1.0], &mut math, |_, _, _| (0.001, false));
+        }
+        let mut rng = StdRng::seed_from_u64(0);
+        let buffer = node.buffer.read().unwrap();
+        buffer.sample(200, &mut rng).iter().map(|e| e.reward).collect()
+    }
+
+    #[test]
+    fn shaping_off_trains_on_raw_reward() {
+        let rewards = stored_rewards(false, "shaping-off.json");
+        assert!(rewards.iter().all(|&r| r == 0.001), "{rewards:?}");
+    }
+
+    #[test]
+    fn shaping_on_rewrites_reward() {
+        let rewards = stored_rewards(true, "shaping-on.json");
+        assert!(rewards.iter().any(|&r| r < -0.1), "{rewards:?}");
     }
 }

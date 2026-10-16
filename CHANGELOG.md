@@ -27,7 +27,16 @@ break).
 - `impl Default for Configurations`, for `..Default::default()`.
 - `Node::weights()`: a flat copy of all model parameters.
 
+- `Configurations::reward_shaping: bool` (default `false`).
+
 ### Changed
+
+- **Breaking (behavior):** reward shaping is now **off by default**, and the
+  learner trains on the raw reward from your callback. Before, it was always
+  on in `Training`/`TrainingWithInterval` and added a penalty of up to about
+  0.5 to failed or over-used actions. That swamped small rewards and taught
+  a single fixed action. Set `reward_shaping = true` to get the old
+  behavior.
 
 - **Breaking for struct literals:** `Configurations` has new public fields.
   Code that builds it with a struct literal must add them or end with

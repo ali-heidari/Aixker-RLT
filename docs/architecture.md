@@ -116,6 +116,7 @@ Provided at startup via `initialize(...)`:
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
 | `seed` (Option<u64>, optional) | Seeds all randomness; `None` = OS entropy (see `src/rng.rs`) |
+| `reward_shaping` (bool, optional) | Built-in reward rewrite (`Node::adjust_settings`); default `false` = train on the raw reward |
 
 **Critical contract:** `input_number` must equal the feature vector length and `output_number` must equal the action space size — a mismatch panics at model initialization.
 
@@ -123,6 +124,7 @@ Provided at startup via `initialize(...)`:
 
 - **Feature dimension mismatch** — `input_number ≠ features.len()` → panic
 - **Reward range** — rewards are expected clamped to `[-1.0, 1.0]`
+- **Reward shaping** — off by default; when on, its fixed penalties (up to ~0.5) dwarf small rewards
 - **Buffer underflow** — training is skipped gracefully until `batch_size` experiences exist
 - **Checkpoint conflicts** — multiple agents writing the same `model_name` corrupt the file; use an ID suffix
 - **Temperature too low** — nearly deterministic, little exploration
