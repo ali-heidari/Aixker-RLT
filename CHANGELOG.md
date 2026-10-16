@@ -10,8 +10,8 @@ break).
 ## [0.2.0] - 2026-10-16
 
 This release fixes the learning bugs that made every trained agent collapse
-to one fixed action. See `FINDINGS.md` for the analysis and `REPORT.md` for
-a summary and upgrade notes.
+to one fixed action. See [docs/learning-fixes-0.2.0.md](docs/learning-fixes-0.2.0.md)
+for the analysis, test results and upgrade notes.
 
 ### Breaking
 

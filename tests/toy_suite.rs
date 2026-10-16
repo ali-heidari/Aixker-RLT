@@ -11,7 +11,7 @@
 //! `TOY_BACKEND=gpu` to train on the GPU backend.
 //!
 //! There is no delayed-reward test: the learner is one-step only (no returns
-//! and no bootstrapping), see FINDINGS.md.
+//! and no bootstrapping), see docs/learning-fixes-0.2.0.md.
 
 mod common;
 

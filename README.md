@@ -303,6 +303,7 @@ AIXKER-RLT is released under the **Apache 2.0 License**.
 This repository includes a `docs/` folder containing readable Markdown documentation and an [index.md](docs/index.md) landing page:
 
 - [architecture.md](docs/architecture.md)
+- [learning-fixes-0.2.0.md](docs/learning-fixes-0.2.0.md) — why 0.1.0 agents collapsed, what 0.2.0 changed, upgrade notes
 - [standards.md](docs/standards.md)
 
 ## Standards
