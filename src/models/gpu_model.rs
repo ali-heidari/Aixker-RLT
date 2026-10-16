@@ -103,6 +103,18 @@ pub struct Grads {
     pub b2: Array1<f32>,
 }
 
+impl Grads {
+    /// Global L2 norm over all four gradient tensors.
+    pub fn norm(&self) -> f32 {
+        let sq = |v: f32, x: &f32| v + x * x;
+        (self.w1.iter().fold(0.0, sq)
+            + self.b1.iter().fold(0.0, sq)
+            + self.w2.iter().fold(0.0, sq)
+            + self.b2.iter().fold(0.0, sq))
+        .sqrt()
+    }
+}
+
 fn pipeline(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ComputePipeline {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),

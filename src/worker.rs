@@ -1,3 +1,4 @@
+use crate::diagnostics::TrainStats;
 use crate::experience::Experience;
 use crate::get_config as CONFIG;
 
@@ -26,10 +27,11 @@ impl Worker {
         &self,
         batch: Vec<Experience>,
         mut model: std::sync::RwLockWriteGuard<'_, Model>,
-    ) -> Result<f32> {
+    ) -> Result<TrainStats> {
         let mut inputs = Array2::<f32>::zeros((batch.len(), CONFIG().input_number as usize));
         let mut predicted_action = Array1::<usize>::zeros(batch.len());
         let mut rewards = Array1::<f32>::zeros(batch.len());
+        let mut raw_rewards = Vec::with_capacity(batch.len());
 
         for (i, experience) in batch.iter().enumerate() {
             inputs.slice_mut(s![i, ..]).assign(&Array1::from(
@@ -37,12 +39,14 @@ impl Worker {
             ));
             predicted_action[i] = experience.action as usize;
             rewards[i] = experience.reward.clamp(-1.0, 1.0);
+            raw_rewards.push(experience.raw_reward);
         }
 
         //  let loss = model.backward(&x, &y, 0.01);
-        let loss = model.reinforce(&inputs, &predicted_action, &rewards, self.learning_rate);
+        let mut stats = model.reinforce(&inputs, &predicted_action, &rewards, self.learning_rate);
+        (stats.reward_mean, stats.reward_std) = TrainStats::mean_std(&raw_rewards);
 
-        Ok(loss)
+        Ok(stats)
     }
 
     pub fn start(node: Arc<Node>) {
@@ -68,10 +72,10 @@ impl Worker {
         drop(buffer);
 
         let model = node.model.write().unwrap();
-        let loss = self.train_on_batch(batch, model).unwrap();
+        let stats = self.train_on_batch(batch, model).unwrap();
         let size = node.batch_history.read().unwrap().len();
 
-        node.set_loss(size as u32 + 1, loss);
+        node.record_stats(size as u32 + 1, stats);
         Ok(())
     }
 
@@ -104,8 +108,8 @@ impl Worker {
             drop(buffer);
 
             let model = node.model.write().unwrap();
-            let loss = self.train_on_batch(batch, model).unwrap();
-            node.set_loss(batch_counter, loss);
+            let stats = self.train_on_batch(batch, model).unwrap();
+            node.record_stats(batch_counter, stats);
         }
         Ok(())
     }

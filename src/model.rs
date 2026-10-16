@@ -1,3 +1,4 @@
+use crate::diagnostics::TrainStats;
 use crate::get_config as CONFIG;
 use crate::models::gpu_model::{GpuModel, Grads};
 use anyhow::Ok;
@@ -124,13 +125,15 @@ impl Model {
         exps
     }
 
+    /// One policy-gradient step on a batch. Returns the batch statistics
+    /// that depend on the model (loss, gradient norm, policy, entropy).
     pub fn reinforce(
         &mut self,
         x: &Array2<f32>,
         actions: &Array1<usize>,
         rewards: &Array1<f32>,
         lr: f32,
-    ) -> f32 {
+    ) -> TrainStats {
         let logits = self.forward(x);
         let probs = Self::softmax2(&logits, 1.0);
 
@@ -140,12 +143,48 @@ impl Model {
         }
 
         let grads = self.backward(x, &grad_logits);
+        let stats = Self::batch_stats(&probs, actions, rewards, &grads);
         self.apply_gradients(&grads, lr);
 
         if self.w1.iter().any(|x| x.is_nan()) {
             warn!("NaN detected in weights!");
         }
-        rewards.mean().unwrap_or(0.0)
+        stats
+    }
+
+    /// Model-side statistics of one batch. `loss` is the REINFORCE loss
+    /// `-mean(r_i · log π(a_i|s_i))`.
+    fn batch_stats(
+        probs: &Array2<f32>,
+        actions: &Array1<usize>,
+        rewards: &Array1<f32>,
+        grads: &Grads,
+    ) -> TrainStats {
+        let n = probs.nrows().max(1) as f32;
+        let loss = actions
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| -rewards[i] * probs[[i, a]].max(1e-12).ln())
+            .sum::<f32>()
+            / n;
+        let entropy = probs
+            .rows()
+            .into_iter()
+            .map(|row| TrainStats::entropy_of(row.as_slice().unwrap()))
+            .sum::<f32>()
+            / n;
+        let mut taken = vec![0.0; probs.ncols()];
+        for &a in actions {
+            taken[a] += 1.0 / n;
+        }
+        TrainStats {
+            loss,
+            grad_norm: grads.norm(),
+            policy: probs.mean_axis(Axis(0)).map(|m| m.to_vec()).unwrap_or_default(),
+            entropy,
+            taken,
+            ..Default::default()
+        }
     }
 
     /// Backpropagate dL/dlogits through the network (GPU when enabled).

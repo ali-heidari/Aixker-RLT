@@ -1,4 +1,5 @@
 use crate::configurations::ComputeBackend;
+use crate::diagnostics::TrainStats;
 use crate::{footstep::Footstep, get_config as CONFIG};
 use aion_math::continuous_math::ContinuousMath;
 use aion_math::math::Math;
@@ -62,6 +63,8 @@ pub struct Node {
     success_rate_mean: RwLock<f32>,
     batch_sampled: RwLock<bool>,
     pub lr: RwLock<f32>,
+    /// Statistics of the most recent training batch.
+    pub last_stats: RwLock<Option<TrainStats>>,
     mode: RunningMode,
 }
 
@@ -88,6 +91,7 @@ impl Node {
             success_rate_mean: RwLock::new(temperature),
             batch_sampled: RwLock::new(false),
             lr: RwLock::new(0.0001),
+            last_stats: RwLock::new(None),
             mode,
         }
     }
@@ -171,6 +175,20 @@ impl Node {
         *node.temperature.write().unwrap() = settings.1;
         *node.lr.write().unwrap() = settings.2;
         *node.enable_adjustment.write().unwrap() = settings.3;
+    }
+
+    /// Store a finished batch's statistics, and log them every
+    /// `log_interval` batches (0 disables the log).
+    pub(crate) fn record_stats(&self, batch_number: u32, mut stats: TrainStats) {
+        stats.batch = batch_number;
+        stats.epsilon = *self.epsilon.read().unwrap();
+        stats.temperature = *self.temperature.read().unwrap();
+        let interval = CONFIG().log_interval;
+        if interval > 0 && (batch_number as u64).is_multiple_of(interval) {
+            info!("{stats}");
+        }
+        self.set_loss(batch_number, stats.loss);
+        *self.last_stats.write().unwrap() = Some(stats);
     }
 
     pub fn set_loss(&self, batch_number: u32, loss: f32) {
@@ -489,6 +507,7 @@ impl Node {
             action: action as u8,
             latency_ms: 0.0, //*inputs.get(5).unwrap(),
             reward: adjusted_reward,
+            raw_reward: reward,
             success,
             timestamp_ms: Instant::now().elapsed().as_millis(),
         };

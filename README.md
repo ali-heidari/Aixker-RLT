@@ -147,9 +147,32 @@ Configuration is provided at startup via `initialize(...)` with a `Configuration
 | `reply_capacity` | Replay buffer capacity |
 | `interval_secs` | Interval for `TrainingWithInterval` mode |
 | `model_name` | Checkpoint file name |
-| `log_interval` | Metric logging interval |
+| `log_interval` | Log one line of training statistics every N batches (`0` = off). See [Training diagnostics](#training-diagnostics). |
 | `mode` | `RunningMode` (`Training`, `TrainingWithInterval`, `Infer`) |
 | `backend` | Optional `ComputeBackend` (`Cpu` default, `Gpu`) |
+
+### Training diagnostics
+
+Every `log_interval` batches the trainer logs one line through the `log`
+crate at `info` level (the host application sets up the logger):
+
+```text
+batch 200: reward mean=0.00120 std=0.01010 | loss=0.00031 grad_norm=0.04210 | eps=0.050 temp=1.000 | policy=[0.334, 0.331, 0.335] entropy=1.0985 | taken=[0.328, 0.344, 0.328]
+```
+
+| Field | Meaning |
+| ----- | ------- |
+| `reward mean` / `std` | Raw reward from your callback, over the batch |
+| `loss` | Policy-gradient loss of the batch |
+| `grad_norm` | Global L2 norm of the gradients, before clipping |
+| `eps` / `temp` | Current random-action rate and sampling temperature |
+| `policy` | Mean probability of each action over the batch's inputs |
+| `entropy` | Mean policy entropy in nats (`ln(n_actions)` = uniform, `0` = one action) |
+| `taken` | Share of each action in the training batch |
+
+Collapse shows up as `entropy` falling toward 0 while `policy` piles onto one
+action, independent of `reward mean`. The latest batch's values are also
+available as `node.last_stats` (`Option<TrainStats>`).
 
 - **Inputs:** Any numeric parameters representing the system/environment state
 - **Outputs:** Actions or decisions produced by the RL model

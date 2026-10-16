@@ -110,7 +110,7 @@ Provided at startup via `initialize(...)`:
 | `hidden_layers` (usize) | Hidden layer neurons |
 | `reply_capacity` (usize) | Max replay buffer size |
 | `model_name` (String) | Checkpoint file name |
-| `log_interval` (u64) | Logging frequency |
+| `log_interval` (u64) | Batches between training-statistics log lines (`0` = off) |
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
 
