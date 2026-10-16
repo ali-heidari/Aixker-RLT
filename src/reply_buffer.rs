@@ -29,8 +29,8 @@ impl ReplayBuffer {
         self.buf.len()
     }
 
-    pub fn sample(&self, n: usize) -> Vec<Experience> {
-        let mut rng = thread_rng();
+    /// Draw `n` experiences uniformly, with replacement.
+    pub fn sample<R: Rng>(&self, n: usize, rng: &mut R) -> Vec<Experience> {
         (0..n)
             .filter_map(|_| self.buf.get(rng.gen_range(0..self.buf.len())).cloned())
             .collect()

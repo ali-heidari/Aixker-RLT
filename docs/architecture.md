@@ -27,7 +27,7 @@ AION-RLT is a lightweight reinforcement learning trainer designed for embeddable
 Central orchestrator managing the RL lifecycle for a single agent.
 
 - Holds `Model` (network weights) and `ReplayBuffer` (experience storage)
-- Manages `epsilon` (exploration) and `temperature` (softmax control)
+- Manages `epsilon` (exploration) and `temperature` (softmax control), following the exploration schedule during training
 - Tracks training metrics: `batch_history`, `success_rate_mean`, divergence/stuck flags
 - Supports `RunningMode`: `Infer`, `Training`, `TrainingWithInterval`
 
@@ -41,6 +41,8 @@ Node::start(
     model_name,                    // checkpoint file name
 ).await;
 ```
+
+`Node::start_with_config(config, ...)` and `Node::new_with_config(config, ...)` take an `Arc<Configurations>` instead of reading the global one set by `initialize()`. Each node keeps its own configuration (`node.config()`), so several differently configured nodes can share a process. `start_with_config` returns the node when its loop ends.
 
 All shared state uses `Arc<RwLock<T>>`: reader threads (inference) don't block each other, the writer thread (training) gets exclusive access when updating.
 
@@ -56,9 +58,12 @@ input (f32) → w1 (input_number × hidden_layers) + b1
            → action probabilities
 ```
 
-- **Training algorithm**: REINFORCE policy gradient — ∇J = Σ ∇log(π(a|s)) · R(a)
+- **Training algorithm**: REINFORCE policy gradient on one-step rewards (a contextual bandit learner — no multi-step returns). For each replayed sample the weight is `ρ · A`:
+  - `A = (r - batch mean) / batch std` — the batch mean is the baseline, and the std makes updates independent of reward scale.
+  - `ρ = min(π(a|s) / b, 2)` — truncated importance weight. `b` is the probability the acting policy gave the action when it was taken (stored in the experience), `π` the current policy.
+  The gradient of `-mean(ρ · A · log π(a|s) + β · H(π(·|s)))` (β = `entropy_coef`, H = policy entropy) is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
 - **Checkpoints**: model serialized to JSON (`{w1, b1, w2, b2}` via serde)
-- Learning rate is held in `Node.lr` (`RwLock<f32>`) and adjustable at runtime
+- Learning rate is held in `Node.lr` (`RwLock<f32>`), starts at `learning_rate`, and can be changed at runtime
 
 ## ReplayBuffer (`reply_buffer.rs`)
 
@@ -87,14 +92,17 @@ The worker runs in the background; the application decides when to stop (counter
 
 ## Inference (`infer_action.rs`)
 
-Action selection via softmax + epsilon-greedy:
+Two action-selection rules share `select_action(node, features, ε, T)`:
 
 1. Forward pass: `logits = model.forward(features)`
-2. Softmax with temperature: `probs = softmax(logits / temperature)`
-3. Epsilon-greedy: with probability ε pick a random action, otherwise the most probable one
-4. Returns `(action_idx, logits, probabilities)`
+2. Softmax with temperature: `probs = softmax(logits / T)` (`T = 0` → argmax)
+3. With probability ε pick a uniform random action, otherwise sample from `probs`
+4. Return the action, logits, probabilities, and the probability this rule gave the chosen action (stored for off-policy correction)
 
-Pure greedy gets stuck in local optima; pure random never exploits learned knowledge. Epsilon balances both, and the Node adjusts it dynamically.
+- **Training** (`Node::next` in `Training`/`TrainingWithInterval`): ε and T follow a linear schedule from `epsilon_start`/`temperature_start` to `epsilon_end`/`temperature_end` over `exploration_batches` batches, then stay at the end values.
+- **Inference** (`infer_action`, and `Node::next` in `Infer` mode): no random actions, temperature `infer_temperature` (default 0.5; `0` = greedy).
+
+Greedy inference turns any small tilt of an uncertain policy into "always the same action". A low inference temperature keeps an uncertain policy uncertain, and a confident policy still picks its best action almost every time.
 
 ## Configuration (`configurations.rs`)
 
@@ -110,9 +118,18 @@ Provided at startup via `initialize(...)`:
 | `hidden_layers` (usize) | Hidden layer neurons |
 | `reply_capacity` (usize) | Max replay buffer size |
 | `model_name` (String) | Checkpoint file name |
-| `log_interval` (u64) | Logging frequency |
+| `log_interval` (u64) | Batches between training-statistics log lines (`0` = off) |
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
+| `seed` (Option<u64>, optional) | Seeds all randomness; `None` = OS entropy (see `src/rng.rs`) |
+| `entropy_coef` (f32, optional) | Entropy bonus β; default 0.1, `0` = off |
+| `epsilon_start` / `epsilon_end` (f32, optional) | Training random-action rate schedule; default 0.3 → 0.05 |
+| `temperature_start` / `temperature_end` (f32, optional) | Training temperature schedule; default 1.5 → 1.0 |
+| `exploration_batches` (u32, optional) | Length of the linear schedule; default 500 |
+| `infer_temperature` (f32, optional) | Inference temperature, no random actions; default 0.5, `0` = greedy |
+| `reward_shaping` (bool, optional) | Built-in reward rewrite (`Node::adjust_settings`); default `false` = train on the raw reward |
+| `learning_rate` (f32, optional) | SGD step per batch; default `0.05` |
+| `max_grad_norm` (f32, optional) | Global-norm gradient clipping; default `1.0`, `0` = off |
 
 **Critical contract:** `input_number` must equal the feature vector length and `output_number` must equal the action space size — a mismatch panics at model initialization.
 
@@ -120,10 +137,11 @@ Provided at startup via `initialize(...)`:
 
 - **Feature dimension mismatch** — `input_number ≠ features.len()` → panic
 - **Reward range** — rewards are expected clamped to `[-1.0, 1.0]`
+- **Reward shaping** — off by default; when on, its fixed penalties (up to ~0.5) dwarf small rewards
 - **Buffer underflow** — training is skipped gracefully until `batch_size` experiences exist
 - **Checkpoint conflicts** — multiple agents writing the same `model_name` corrupt the file; use an ID suffix
-- **Temperature too low** — nearly deterministic, little exploration
-- **Epsilon too high** — mostly random actions, slow learning
+- **Exploration ending too early** — with small, noisy rewards a context can settle on a wrong action before the signal is clear; lengthen `exploration_batches` or raise `epsilon_end`
+- **Greedy inference** (`infer_temperature = 0`) — an uncertain policy then always picks the same action
 
 ## Extending AION-RLT
 
@@ -133,15 +151,12 @@ Provided at startup via `initialize(...)`:
 
 ## GPU backend
 
-Setting `backend = "Gpu"` in the configuration routes `Model::forward` and `Model::reinforce` through `GpuModel` (`src/models/gpu_model.rs`), which runs the WGSL compute shaders via `wgpu` (Vulkan/Metal/DX12 — no CUDA required):
+Setting `backend = "Gpu"` in the configuration routes the forward pass and backpropagation in `Model` through `GpuModel` (`src/models/gpu_model.rs`), which runs the WGSL compute shaders via `wgpu` (Vulkan/Metal/DX12 — no CUDA required):
 
 - `forward.wgsl` — generic linear layer (dispatched per layer; ReLU flag in uniforms)
-- `softmax.wgsl` — row-wise temperature softmax
-- `reinforce.wgsl` — REINFORCE gradient w.r.t. logits
 - `grad-weights.wgsl` / `grad-bias.wgsl` / `grad-hidden.wgsl` — backprop gradients
-- `weight-update.wgsl` — SGD step
 
-Weights live in persistent GPU buffers and are downloaded back to the CPU copy after each training batch, so JSON checkpoints are backend-agnostic. `Model::sanitize` re-uploads the cleaned weights. If no GPU adapter is available, the library warns and falls back to CPU. Parity with the CPU path is asserted by the `gpu_matches_cpu` test.
+The loss gradient with respect to the logits and the SGD step run on the CPU, shared by both backends. After each update the CPU weights are uploaded to the GPU buffers, so the CPU copy is always current and JSON checkpoints are backend-agnostic. `Model::sanitize` re-uploads the cleaned weights. If no GPU adapter is available, the library warns and falls back to CPU. Parity with the CPU path is asserted by the `gpu_matches_cpu` test.
 
 For small networks the CPU is typically faster; the GPU pays off as `hidden_layers`, `input_number`, and `batch_size` grow.
 
