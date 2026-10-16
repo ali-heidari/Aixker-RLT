@@ -133,15 +133,12 @@ Provided at startup via `initialize(...)`:
 
 ## GPU backend
 
-Setting `backend = "Gpu"` in the configuration routes `Model::forward` and `Model::reinforce` through `GpuModel` (`src/models/gpu_model.rs`), which runs the WGSL compute shaders via `wgpu` (Vulkan/Metal/DX12 — no CUDA required):
+Setting `backend = "Gpu"` in the configuration routes the forward pass and backpropagation in `Model` through `GpuModel` (`src/models/gpu_model.rs`), which runs the WGSL compute shaders via `wgpu` (Vulkan/Metal/DX12 — no CUDA required):
 
 - `forward.wgsl` — generic linear layer (dispatched per layer; ReLU flag in uniforms)
-- `softmax.wgsl` — row-wise temperature softmax
-- `reinforce.wgsl` — REINFORCE gradient w.r.t. logits
 - `grad-weights.wgsl` / `grad-bias.wgsl` / `grad-hidden.wgsl` — backprop gradients
-- `weight-update.wgsl` — SGD step
 
-Weights live in persistent GPU buffers and are downloaded back to the CPU copy after each training batch, so JSON checkpoints are backend-agnostic. `Model::sanitize` re-uploads the cleaned weights. If no GPU adapter is available, the library warns and falls back to CPU. Parity with the CPU path is asserted by the `gpu_matches_cpu` test.
+The loss gradient with respect to the logits and the SGD step run on the CPU, shared by both backends. After each update the CPU weights are uploaded to the GPU buffers, so the CPU copy is always current and JSON checkpoints are backend-agnostic. `Model::sanitize` re-uploads the cleaned weights. If no GPU adapter is available, the library warns and falls back to CPU. Parity with the CPU path is asserted by the `gpu_matches_cpu` test.
 
 For small networks the CPU is typically faster; the GPU pays off as `hidden_layers`, `input_number`, and `batch_size` grow.
 

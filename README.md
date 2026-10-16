@@ -102,9 +102,10 @@ cargo build --release
 
 ### GPU (selectable via configuration)
 
-A GPU compute backend based on **`wgpu`** (Vulkan / Metal / DX12 / OpenGL)
-runs the full pipeline — forward pass, softmax, REINFORCE gradients, and
-weight updates — as compute shaders. It works on any GPU supported by `wgpu`
+A GPU compute backend based on **`wgpu`** (Vulkan / Metal / DX12) runs the
+matrix work — the forward pass and backpropagation — as compute shaders. The
+small per-batch steps (loss gradient and SGD update) run on the CPU and
+the new weights are uploaded back to the GPU. It works on any GPU supported by `wgpu`
 (NVIDIA, AMD, Intel, Apple Silicon) without CUDA.
 
 Select it with the `backend` field of `Configurations` (TOML or struct):
@@ -119,13 +120,12 @@ Behavior:
   working unchanged.
 - If no compatible GPU adapter is found at startup, the library logs a
   warning and **falls back to CPU automatically** — it never crashes.
-- Model checkpoints stay backend-agnostic JSON: after each GPU training
-  batch the updated weights are synced back to the CPU copy, so you can
-  train on GPU and infer on CPU (or vice versa) with the same file.
+- Model checkpoints stay backend-agnostic JSON: the CPU copy of the weights
+  is always current, so you can train on GPU and infer on CPU (or vice
+  versa) with the same file.
 
-The compute shaders live in `src/*.wgsl` (`forward`, `softmax`, `reinforce`,
-`grad-weights`, `grad-bias`, `grad-hidden`, `weight-update`), orchestrated by
-`src/models/gpu_model.rs`. GPU/CPU parity is covered by the
+The compute shaders live in `src/*.wgsl` (`forward`, `grad-weights`,
+`grad-bias`, `grad-hidden`), orchestrated by `src/models/gpu_model.rs`. GPU/CPU parity is covered by the
 `gpu_matches_cpu` unit test (`cargo test gpu_matches_cpu`).
 
 > Note: for very small networks (e.g. 8×16×3) CPU is usually faster — GPU

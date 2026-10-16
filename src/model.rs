@@ -1,5 +1,5 @@
 use crate::get_config as CONFIG;
-use crate::models::gpu_model::GpuModel;
+use crate::models::gpu_model::{GpuModel, Grads};
 use anyhow::Ok;
 use log::{info, warn};
 use ndarray::{Array1, Array2, Axis};
@@ -131,24 +131,7 @@ impl Model {
         rewards: &Array1<f32>,
         lr: f32,
     ) -> f32 {
-        if let Some(gpu) = self.gpu.clone() {
-            match gpu.reinforce(
-                x,
-                actions,
-                rewards,
-                lr,
-                &mut self.w1,
-                &mut self.b1,
-                &mut self.w2,
-                &mut self.b2,
-            ) {
-                std::result::Result::Ok(loss) => return loss,
-                Err(e) => warn!("GPU reinforce failed, using CPU: {e}"),
-            }
-        }
-        let h_pre = x.dot(&self.w1) + &self.b1;
-        let h = Self::relu(&h_pre);
-        let logits = h.dot(&self.w2) + &self.b2;
+        let logits = self.forward(x);
         let probs = Self::softmax2(&logits, 1.0);
 
         let mut grad_logits = Array2::<f32>::zeros(probs.raw_dim());
@@ -156,22 +139,44 @@ impl Model {
             grad_logits[[i, a]] = -rewards[i] * (1.0 - probs[[i, a]]);
         }
 
-        let grad_w2 = h.t().dot(&grad_logits);
-        let grad_b2 = grad_logits.sum_axis(Axis(0));
-        let grad_h = grad_logits.dot(&self.w2.t());
-        let grad_h_relu = grad_h * &h_pre.mapv(|v| if v > 0.0 { 1.0 } else { 0.0 });
-        let grad_w1 = x.t().dot(&grad_h_relu);
-        let grad_b1 = grad_h_relu.sum_axis(Axis(0));
-
-        self.w1 -= &(lr * grad_w1);
-        self.b1 -= &(lr * grad_b1);
-        self.w2 -= &(lr * grad_w2);
-        self.b2 -= &(lr * grad_b2);
+        let grads = self.backward(x, &grad_logits);
+        self.apply_gradients(&grads, lr);
 
         if self.w1.iter().any(|x| x.is_nan()) {
             warn!("NaN detected in weights!");
         }
         rewards.mean().unwrap_or(0.0)
+    }
+
+    /// Backpropagate dL/dlogits through the network (GPU when enabled).
+    fn backward(&self, x: &Array2<f32>, grad_logits: &Array2<f32>) -> Grads {
+        if let Some(gpu) = &self.gpu {
+            match gpu.backward(x, grad_logits) {
+                std::result::Result::Ok(grads) => return grads,
+                Err(e) => warn!("GPU backward failed, using CPU: {e}"),
+            }
+        }
+        let h_pre = x.dot(&self.w1) + &self.b1;
+        let h = Self::relu(&h_pre);
+        let grad_h = grad_logits.dot(&self.w2.t());
+        let grad_h_relu = grad_h * &h_pre.mapv(|v| if v > 0.0 { 1.0 } else { 0.0 });
+        Grads {
+            w1: x.t().dot(&grad_h_relu),
+            b1: grad_h_relu.sum_axis(Axis(0)),
+            w2: h.t().dot(grad_logits),
+            b2: grad_logits.sum_axis(Axis(0)),
+        }
+    }
+
+    /// Plain SGD step; keeps the GPU copy of the weights in sync.
+    fn apply_gradients(&mut self, grads: &Grads, lr: f32) {
+        self.w1.scaled_add(-lr, &grads.w1);
+        self.b1.scaled_add(-lr, &grads.b1);
+        self.w2.scaled_add(-lr, &grads.w2);
+        self.b2.scaled_add(-lr, &grads.b2);
+        if let Some(gpu) = &self.gpu {
+            gpu.upload_weights(&self.w1, &self.b1, &self.w2, &self.b2);
+        }
     }
 
     fn model_path(&self) -> String {
