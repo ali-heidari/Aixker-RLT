@@ -28,13 +28,15 @@ bots. It is a reusable RL engine, not specific to any domain.
 | Module | Responsibility |
 | ------ | -------------- |
 | `src/lib.rs` | Module declarations, `CONFIG` singleton, `initialize()` |
-| `src/node.rs` | `Node` orchestrator, `RunningMode`, training state, epsilon/temperature |
-| `src/model.rs` | Two-layer NN (ReLU hidden, softmax output), REINFORCE updates, JSON checkpoints |
+| `src/node.rs` | `Node` orchestrator, `RunningMode`, training state, exploration schedule, optional reward shaping |
+| `src/model.rs` | Two-layer NN (ReLU hidden, softmax output), policy gradient with normalized advantages, truncated importance weights, entropy bonus, clipping; JSON checkpoints |
 | `src/worker.rs` | Async background training loop (batch sampling, weight updates) |
-| `src/reply_buffer.rs` | Replay buffer: capacity-bounded storage + uniform random sampling |
-| `src/infer_action.rs` | Action selection: softmax with temperature + epsilon-greedy |
-| `src/experience.rs` | `Experience` struct: features, action, latency_ms, reward, success, timestamp_ms |
-| `src/configurations.rs` | `Configurations` struct loaded at startup via `initialize()` |
+| `src/reply_buffer.rs` | Replay buffer: capacity-bounded storage + uniform random sampling (caller-supplied RNG) |
+| `src/infer_action.rs` | Action selection: ε + temperature sampling while training; `infer_action` uses no ε and `infer_temperature` |
+| `src/experience.rs` | `Experience` struct: features, action, reward, raw_reward, behavior_prob, success, ... |
+| `src/configurations.rs` | `Configurations` struct (`Default`, exploration schedule) |
+| `src/diagnostics.rs` | `TrainStats`: per-batch statistics, logged every `log_interval` batches |
+| `src/rng.rs` | Seeded RNG streams derived from `Configurations::seed` |
 | `src/footstep/` | Internal diagnostics module |
 | `src/models/gpu_model.rs` + `src/*.wgsl` | GPU compute backend (wgpu), enabled via `Configurations::backend = Gpu` |
 
@@ -51,7 +53,8 @@ pub async fn start<F, H>(
 )
 ```
 
-Call `aixker_rlt::initialize(config)` exactly once before `Node::start`.
+Call `aixker_rlt::initialize(config)` exactly once before `Node::start`, or
+pass a config per node with `Node::start_with_config` / `Node::new_with_config`.
 All shared state (`model`, `buffer`, `epsilon`, `temperature`, `lr`) is behind
 `Arc<RwLock<...>>` for concurrent inference/training access.
 
@@ -60,16 +63,24 @@ All shared state (`model`, `buffer`, `epsilon`, `temperature`, `lr`) is behind
 - `input_number` MUST match the feature vector length returned by the input
   bearer; `output_number` MUST match the action space size. Mismatch panics at
   model initialization.
-- Rewards are expected in `[-1.0, 1.0]` (clamped in the worker).
+- Rewards are expected in `[-1.0, 1.0]` (clamped in the worker). Their scale
+  does not matter otherwise: advantages are normalized per batch.
+- No `thread_rng()` on the learning path. All randomness goes through
+  `src/rng.rs` streams so `seed` makes `Training` runs repeatable; the
+  `determinism` test guards this.
+- The toy suite (`cargo test --release --test toy_suite -- --ignored`) MUST
+  pass on all seeds after any change to the learning algorithm.
 - Training is skipped gracefully until the buffer holds `batch_size`
   experiences.
 - Multiple agents MUST NOT share a checkpoint `model_name` (corruption risk —
   use an ID suffix).
 - The compute backend defaults to CPU; GPU is opt-in via
   `Configurations::backend = Gpu` and MUST fall back to CPU (with a warning)
-  when no adapter is available. GPU and CPU paths MUST stay numerically
-  equivalent — the `gpu_matches_cpu` test guards this; keep it passing when
-  touching `model.rs`, `gpu_model.rs`, or any `.wgsl` shader.
+  when no adapter is available. The GPU runs only the forward pass and
+  backpropagation; the loss gradient, clipping and SGD step are shared CPU
+  code. GPU and CPU MUST stay numerically equivalent — the `gpu_matches_cpu`
+  test guards this; keep it passing when touching `model.rs`,
+  `gpu_model.rs`, or any `.wgsl` shader.
 
 ## Project-specific conventions
 

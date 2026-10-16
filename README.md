@@ -47,28 +47,32 @@ cargo build --release
 ## 🧬 Example Usage
 
 ```rust
+use std::sync::Arc;
+
+use aixker_rlt::configurations::Configurations;
 use aixker_rlt::{initialize, node::Node, RunningMode};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    env_logger::init();
-    let state = Arc::new(Mutex::new(SyntheticState::new()));
-    let cloned_state = Arc::clone(&state);
+async fn main() {
+    env_logger::init(); // any `log` backend; the crate logs training stats at `info`
 
     // Load configuration once at startup
-    initialize(load_config().unwrap());
+    initialize(Arc::new(Configurations {
+        input_number: 8,
+        output_number: 3,
+        log_interval: 50,
+        ..Default::default()
+    }));
 
     Node::start(
         // Feature provider: returns the current state as a feature vector
-        move |lowest_state| get_features(&mut cloned_state.lock().unwrap(), lowest_state),
-        // Reward function: scores the chosen action
-        |x, y| compute_reward_with_success(x, y as u8),
+        |_lowest_state| vec![0.0; 8],
+        // Reward function: (features, action, step) -> (reward, success)
+        |_features, action, _step| (if action == 1 { 0.01 } else { -0.01 }, action == 1),
         RunningMode::Training,
         "my-model.json",
     )
     .await;
-
-    Ok(())
 }
 ```
 
@@ -150,7 +154,7 @@ The compute shaders live in `src/*.wgsl` (`forward`, `grad-weights`,
 
 ## Configuration
 
-Configuration is provided at startup via `initialize(...)` with a `Configurations` struct (deserializable with `serde`):
+Configuration is provided at startup via `initialize(...)` (or per node with `Node::start_with_config`) as a `Configurations` struct, deserializable with `serde`. Every field marked optional can be left out of a TOML/JSON config:
 
 | Field | Description |
 | ----- | ----------- |
@@ -222,6 +226,38 @@ batch 200: reward mean=0.00120 std=0.01010 | loss=0.00031 grad_norm=0.04210 | ep
 Collapse shows up as `entropy` falling toward 0 while `policy` piles onto one
 action, independent of `reward mean`. The latest batch's values are also
 available as `node.last_stats` (`Option<TrainStats>`).
+
+### Recommended settings for small, noisy rewards
+
+For rewards like trading returns (around ±0.001-0.01 per step, mostly
+noise), start from the defaults and check these:
+
+```toml
+reward_shaping = false        # default; the built-in penalty is ~100x a trading reward
+learning_rate = 0.05          # default; lower to 0.02 if grad_norm sits at max_grad_norm
+max_grad_norm = 1.0
+entropy_coef = 0.1            # keep >= 0.03 so noise can't make the policy confident
+epsilon_start = 0.3
+epsilon_end = 0.05
+temperature_start = 1.5
+temperature_end = 1.0
+exploration_batches = 1000    # about a quarter of total_batches for noisy rewards
+infer_temperature = 0.5       # 0 = greedy, which turns an unsure policy into one fixed action
+batch_size = 128              # bigger batches average out more noise per step
+reply_capacity = 4096         # ~30 batches; older data is only partly corrected
+seed = 42                     # for experiments you want to repeat
+log_interval = 50
+```
+
+- **Reward scale doesn't matter.** Rewards are normalized per batch, so
+  ±0.002 learns like ±1. Rewards are still clamped to `[-1, 1]`.
+- **Scale your inputs.** Keep features roughly in `[-1, 1]` or z-scored. Raw
+  prices make the hidden layer and the gradients huge.
+- **Watch the log.** If `entropy` drops toward 0 while `reward mean` is flat,
+  the policy is fitting noise: raise `entropy_coef` or lower `learning_rate`.
+- **Check on a known problem first.** `tests/toy_suite.rs` has bandit,
+  small-signal and pure-noise problems with known answers
+  (`cargo test --release --test toy_suite -- --ignored --nocapture`).
 
 - **Inputs:** Any numeric parameters representing the system/environment state
 - **Outputs:** Actions or decisions produced by the RL model

@@ -226,6 +226,9 @@ Budgets: bandit 1,500 batches, small-signal 4,000, null 3,000.
 | Fix 3: normalized advantage + importance weights | 0.989 / 0.995 / 0.991 ✓ | 0.991 / 0.986 / 0.993 ✓ | 0.563, 1.073 / 0.538, 1.080 / 0.578, 1.047 ✗ | 2 / 3 |
 | Fix 4: exploration schedule, inference T 0.5 | 1.000 / 1.000 / 1.000 ✓ | 1.000 / 0.752 / 1.000 ✗ | 0.505, 1.079 / 0.475, 1.086 / 0.360, 1.098 ✗ | 1 / 3 |
 | Round 1: entropy bonus β = 0.1 | 1.000 / 1.000 / 1.000 ✓ | 0.998 / 0.998 / 0.999 ✓ | 0.413, 1.091 / 0.377, 1.097 / 0.354, 1.098 ✓ | 3 / 3 |
+| **Final** (defaults, CPU) | 1.000 / 1.000 / 1.000 ✓ | 0.998 / 0.998 / 0.999 ✓ | 0.413, 1.091 / 0.377, 1.097 / 0.354, 1.098 ✓ | 3 / 3 |
+| Final, GPU backend | 1.000 / 1.000 / 1.000 ✓ | 0.998 / 0.998 / 0.999 ✓ | 0.413, 1.091 / 0.377, 1.097 / 0.354, 1.098 ✓ | 3 / 3 |
+| Final, README recommended settings | — | 0.999 / 0.998 / 0.998 ✓ | 0.337, 1.098 / 0.400, 1.096 / 0.382, 1.097 ✓ | 2 / 2 |
 
 Before fixes:
 
@@ -322,4 +325,37 @@ normalized advantages, so `β` does not depend on the reward scale.
 - Seed 2 of small-signal now finds the right action. The bonus kept that
   context from locking in early.
 - One round was needed, out of the 3 allowed.
+
+### Final runs
+
+- **CPU, defaults.** 9/9 pass in about 9 s (release build). The results
+  match the round-1 β = 0.1 run digit for digit, as seeded runs should.
+- **GPU backend** (`TOY_BACKEND=gpu`). Same results at every printed digit;
+  5 m 17 s, because per-dispatch overhead dominates for an 8 → 16 → 3
+  network.
+- **README "recommended settings for small, noisy rewards"** (batch 128,
+  replay 4,096, 1,000 exploration batches; test
+  `recommended_settings_small_noisy_rewards`). Small-signal and null pass
+  on all seeds.
+
+## Status of every finding
+
+| Finding | Status |
+| ------- | ------ |
+| 1. Reward shaping swamps the reward | Fixed: `reward_shaping`, off by default |
+| 2. Exploration stuck at its caps | Fixed: linear schedule, no exploration at inference |
+| 3. No baseline, summed gradients, exploding weights | Fixed: normalized advantages, averaged and clipped gradients |
+| 4. No seed control | Fixed: `seed` with per-stream `StdRng`; `determinism` test |
+| Off-policy replay | Fixed: truncated importance weights from stored behavior probabilities |
+| `infer_action` explores | Fixed: no ε, `infer_temperature` (0.5, or 0 for greedy) |
+| No gradient clipping; per-step lr decay | Fixed: `max_grad_norm`; constant `learning_rate` |
+| Weak NaN/Inf handling | Fixed: bad experiences dropped, bad updates skipped, warnings |
+| E1. Wrong softmax gradient | Fixed: full gradient; finite-difference test |
+| E2. "Loss" is mean reward | Fixed: real loss, plus the statistics log |
+| E3. `report()` assumes 3 actions | Fixed |
+| E4. Training vs acting temperature | Fixed by the importance weights (`b` includes the acting temperature) |
+| E5. `TrainingWithInterval` never yields | Fixed |
+| E6. Write locks on read paths | Fixed in the action-selection rework |
+| Last batch not saved | Fixed (found while writing tests) |
+| Value-head baseline | Not done: needs a checkpoint format change and GPU backward changes |
 
