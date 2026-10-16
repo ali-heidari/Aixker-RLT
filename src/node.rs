@@ -208,6 +208,11 @@ impl Node {
             }
             node.next(inputs, &mut math, &compute_reward_with_success);
 
+            if let RunningMode::TrainingWithInterval = node.mode {
+                // Let the background worker run, also on a single-threaded runtime.
+                tokio::task::yield_now().await;
+            }
+
             if (*node.counter.read().unwrap()).is_multiple_of(node.config.batch_size as u64) {
                 if let RunningMode::Training = node.mode {
                     worker.do_once(&node).expect("Training failed!");

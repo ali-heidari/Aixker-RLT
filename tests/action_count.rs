@@ -47,3 +47,45 @@ fn trains_with_two_actions() {
 fn trains_with_five_actions() {
     train_with_actions(5);
 }
+
+/// The background worker of `TrainingWithInterval` must get to run on a
+/// single-threaded runtime too.
+#[test]
+fn interval_worker_runs_on_current_thread_runtime() {
+    let config = Configurations {
+        interval_secs: 0,
+        batch_size: 8,
+        total_batches: 5,
+        input_number: 2,
+        output_number: 3,
+        hidden_layers: 4,
+        reply_capacity: 64,
+        model_name: "interval-worker.json".to_owned(),
+        seed: Some(5),
+        ..Default::default()
+    };
+    let path = format!("./models/test.{}", config.model_name);
+    let _ = std::fs::remove_file(&path);
+    let steps = std::cell::Cell::new(0);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let node = runtime.block_on(Node::start_with_config(
+        Arc::new(config),
+        |_| {
+            // Stop after 2,000 steps so a starved worker fails instead of hanging.
+            steps.set(steps.get() + 1);
+            if steps.get() > 2_000 {
+                vec![]
+            } else {
+                vec![0.5, -0.5]
+            }
+        },
+        |_, action, _| (action as f32 * 0.1, action > 0),
+        RunningMode::TrainingWithInterval,
+        "test",
+    ));
+    let _ = std::fs::remove_file(&path);
+    assert!(!node.batch_history.read().unwrap().is_empty(), "the worker never trained");
+}

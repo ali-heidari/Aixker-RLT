@@ -72,6 +72,8 @@ break).
 - **Fix:** an update with a non-finite gradient is skipped with a warning.
   `sanitize()` and the uniform-action fallback now warn instead of silently
   resetting weights or acting at random.
+- **Fix:** `TrainingWithInterval` yields to the runtime after each step, so
+  its background worker also runs on a single-threaded tokio runtime.
 - **Fix:** the checkpoint is saved once more when the training loop ends.
   Before, the last batch's weights were never written.
 - **Fix:** training works with any number of actions. The per-batch
