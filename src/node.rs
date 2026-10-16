@@ -109,7 +109,7 @@ impl Node {
             stuck: RwLock::new(false),
             success_rate_mean: RwLock::new(temperature),
             batch_sampled: RwLock::new(false),
-            lr: RwLock::new(0.0001),
+            lr: RwLock::new(config.learning_rate),
             last_stats: RwLock::new(None),
             rng: Mutex::new(rng::stream_rng(config.seed, rng::STREAM_ACTING)),
             mode,
@@ -224,8 +224,8 @@ impl Node {
     pub fn set_default_factors(node: &Arc<Node>, mode: RunningMode) {
         *node.enable_adjustment.write().unwrap() = true;
         let settings = match mode {
-            RunningMode::Infer => (0.01, 0.5, 0.0000001, false),
-            _ => (0.5, 3.0, 0.00001, true),
+            RunningMode::Infer => (0.01, 0.5, node.config.learning_rate, false),
+            _ => (0.5, 3.0, node.config.learning_rate, true),
         };
         *node.epsilon.write().unwrap() = settings.0;
         *node.temperature.write().unwrap() = settings.1;
@@ -465,24 +465,9 @@ impl Node {
         *self.temperature.write().unwrap() = temperature;
     }
 
-    fn adjust_lr(&self, push_down: bool) {
-        let mut lr = *self.lr.read().unwrap();
-        if push_down {
-            lr = (lr * 0.99).max(if *self.stuck.read().unwrap() {
-                0.00001
-            } else {
-                0.000001
-            });
-        } else {
-            lr = (lr + 0.99).min(0.0001);
-        }
-        *self.lr.write().unwrap() = lr;
-    }
-
     fn adjust_factors(&self, down_trend: bool) {
         self.adjust_epsilon(down_trend);
         self.adjust_temperature(down_trend);
-        // self.adjust_lr(down_trend);
     }
 
     fn detect_stuck(&self, success_rates: &[f32]) {
@@ -516,7 +501,6 @@ impl Node {
 
         if self.batch_history.read().unwrap().len().is_multiple_of(50) {
             self.detect_stuck(&success_rates);
-            self.adjust_lr(!*self.stuck.read().unwrap() || *self.diverging.read().unwrap());
         }
 
         if !self.config.reward_shaping {

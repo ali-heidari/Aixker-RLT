@@ -30,6 +30,7 @@ impl Worker {
     fn train_on_batch(
         &self,
         input_number: usize,
+        max_grad_norm: f32,
         batch: Vec<Experience>,
         mut model: std::sync::RwLockWriteGuard<'_, Model>,
     ) -> Result<TrainStats> {
@@ -48,7 +49,13 @@ impl Worker {
         }
 
         //  let loss = model.backward(&x, &y, 0.01);
-        let mut stats = model.reinforce(&inputs, &predicted_action, &rewards, self.learning_rate);
+        let mut stats = model.reinforce(
+            &inputs,
+            &predicted_action,
+            &rewards,
+            self.learning_rate,
+            max_grad_norm,
+        );
         (stats.reward_mean, stats.reward_std) = TrainStats::mean_std(&raw_rewards);
 
         Ok(stats)
@@ -77,7 +84,7 @@ impl Worker {
         drop(buffer);
 
         let model = node.model.write().unwrap();
-        let stats = self.train_on_batch(node.config().input_number, batch, model).unwrap();
+        let stats = self.train_on_batch(node.config().input_number, node.config().max_grad_norm, batch, model).unwrap();
         let size = node.batch_history.read().unwrap().len();
 
         node.record_stats(size as u32 + 1, stats);
@@ -113,7 +120,7 @@ impl Worker {
             drop(buffer);
 
             let model = node.model.write().unwrap();
-            let stats = self.train_on_batch(node.config().input_number, batch, model).unwrap();
+            let stats = self.train_on_batch(node.config().input_number, node.config().max_grad_norm, batch, model).unwrap();
             node.record_stats(batch_counter, stats);
         }
         Ok(())

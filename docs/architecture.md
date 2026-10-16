@@ -58,9 +58,9 @@ input (f32) → w1 (input_number × hidden_layers) + b1
            → action probabilities
 ```
 
-- **Training algorithm**: REINFORCE policy gradient — ∇J = Σ ∇log(π(a|s)) · R(a)
+- **Training algorithm**: REINFORCE policy gradient on one-step rewards. The gradient is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
 - **Checkpoints**: model serialized to JSON (`{w1, b1, w2, b2}` via serde)
-- Learning rate is held in `Node.lr` (`RwLock<f32>`) and adjustable at runtime
+- Learning rate is held in `Node.lr` (`RwLock<f32>`), starts at `learning_rate`, and can be changed at runtime
 
 ## ReplayBuffer (`reply_buffer.rs`)
 
@@ -117,6 +117,8 @@ Provided at startup via `initialize(...)`:
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
 | `seed` (Option<u64>, optional) | Seeds all randomness; `None` = OS entropy (see `src/rng.rs`) |
 | `reward_shaping` (bool, optional) | Built-in reward rewrite (`Node::adjust_settings`); default `false` = train on the raw reward |
+| `learning_rate` (f32, optional) | SGD step per batch; default `0.05` |
+| `max_grad_norm` (f32, optional) | Global-norm gradient clipping; default `1.0`, `0` = off |
 
 **Critical contract:** `input_number` must equal the feature vector length and `output_number` must equal the action space size — a mismatch panics at model initialization.
 

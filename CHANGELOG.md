@@ -28,8 +28,20 @@ break).
 - `Node::weights()`: a flat copy of all model parameters.
 
 - `Configurations::reward_shaping: bool` (default `false`).
+- `Configurations::learning_rate` (default `0.05`) and
+  `Configurations::max_grad_norm` (default `1.0`, `0` = off): gradient
+  clipping by global L2 norm.
 
 ### Changed
+
+- **Breaking (behavior):** gradients are averaged over the batch instead of
+  summed, and clipped to `max_grad_norm`. The learning rate is now a
+  constant from the config (default `0.05`). Before, it was hard-coded to
+  `1e-5` with summed gradients (effectively `6.4e-4` per sample) and decayed
+  toward `1e-6` by a rule that ran on every step.
+- **Fix:** the policy gradient now uses the full softmax gradient
+  `-r·(onehot(a) - π)`. Before, only the chosen action's term was applied,
+  so the update was not the gradient of any loss.
 
 - **Breaking (behavior):** reward shaping is now **off by default**, and the
   learner trains on the raw reward from your callback. Before, it was always

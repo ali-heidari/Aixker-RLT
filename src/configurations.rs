@@ -38,6 +38,22 @@ pub struct Configurations {
     /// your rewards are on the order of ±1.
     #[serde(default)]
     pub reward_shaping: bool,
+    /// SGD step size, applied once per batch to the batch-averaged
+    /// gradient. Can be changed at runtime through `Node::lr`.
+    #[serde(default = "default_learning_rate")]
+    pub learning_rate: f32,
+    /// Clip the gradient so its global L2 norm is at most this value.
+    /// `0` disables clipping.
+    #[serde(default = "default_max_grad_norm")]
+    pub max_grad_norm: f32,
+}
+
+fn default_learning_rate() -> f32 {
+    0.05
+}
+
+fn default_max_grad_norm() -> f32 {
+    1.0
 }
 
 impl Default for Configurations {
@@ -59,6 +75,8 @@ impl Default for Configurations {
             backend: ComputeBackend::Cpu,
             seed: None,
             reward_shaping: false,
+            learning_rate: default_learning_rate(),
+            max_grad_norm: default_max_grad_norm(),
         }
     }
 }

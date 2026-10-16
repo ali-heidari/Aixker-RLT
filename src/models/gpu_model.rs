@@ -113,6 +113,19 @@ impl Grads {
             + self.b2.iter().fold(0.0, sq))
         .sqrt()
     }
+
+    /// Scale all gradients down so the global norm is at most `max_norm`.
+    /// `max_norm <= 0` disables clipping.
+    pub fn clip_norm(&mut self, max_norm: f32) {
+        let norm = self.norm();
+        if max_norm > 0.0 && norm > max_norm {
+            let scale = max_norm / norm;
+            self.w1 *= scale;
+            self.b1 *= scale;
+            self.w2 *= scale;
+            self.b2 *= scale;
+        }
+    }
 }
 
 fn pipeline(device: &wgpu::Device, label: &str, src: &str) -> wgpu::ComputePipeline {

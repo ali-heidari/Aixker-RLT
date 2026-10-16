@@ -5,7 +5,8 @@
 //! cargo test --release --test toy_suite -- --ignored --nocapture
 //! ```
 //!
-//! Set `TOY_LOG=N` to print the training statistics every N batches.
+//! Set `TOY_LOG=N` to print the training statistics every N batches, and
+//! `TOY_LR=x` to override the default learning rate.
 //!
 //! There is no delayed-reward test: the learner is one-step only (no returns
 //! and no bootstrapping), see FINDINGS.md.
@@ -57,6 +58,9 @@ fn run(name: &str, seed: u64, batches: usize, reward: Rc<RewardFn>) -> Eval {
     let contexts = Rc::new(Contexts::random(seed));
     let mut cfg = config(Some(seed), batches, &format!("toy-{name}-{seed}.json"));
     cfg.log_interval = log_interval();
+    if let Some(lr) = std::env::var("TOY_LR").ok().and_then(|v| v.parse().ok()) {
+        cfg.learning_rate = lr;
+    }
     let node = train(cfg, contexts.clone(), seed + 100, reward);
     evaluate(&node, &contexts, SAMPLES)
 }

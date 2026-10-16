@@ -151,23 +151,39 @@ impl Model {
         actions: &Array1<usize>,
         rewards: &Array1<f32>,
         lr: f32,
+        max_grad_norm: f32,
     ) -> TrainStats {
-        let logits = self.forward(x);
-        let probs = Self::softmax2(&logits, 1.0);
-
-        let mut grad_logits = Array2::<f32>::zeros(probs.raw_dim());
-        for (i, &a) in actions.iter().enumerate() {
-            grad_logits[[i, a]] = -rewards[i] * (1.0 - probs[[i, a]]);
-        }
-
-        let grads = self.backward(x, &grad_logits);
+        let (probs, mut grads) = self.policy_gradient(x, actions, rewards);
         let stats = Self::batch_stats(&probs, actions, rewards, &grads);
+        grads.clip_norm(max_grad_norm);
         self.apply_gradients(&grads, lr);
 
         if self.w1.iter().any(|x| x.is_nan()) {
             warn!("NaN detected in weights!");
         }
         stats
+    }
+
+    /// Policy probabilities (temperature 1) and the gradient of
+    /// `L = -mean_i(r_i · log π(a_i|s_i))` with respect to every weight.
+    fn policy_gradient(
+        &self,
+        x: &Array2<f32>,
+        actions: &Array1<usize>,
+        rewards: &Array1<f32>,
+    ) -> (Array2<f32>, Grads) {
+        let logits = self.forward(x);
+        let probs = Self::softmax2(&logits, 1.0);
+
+        // dL/dz_i = -r_i · (onehot(a_i) - p_i) / n, for every action.
+        let n = x.nrows().max(1) as f32;
+        let mut grad_logits = probs.clone();
+        for (i, &a) in actions.iter().enumerate() {
+            grad_logits[[i, a]] -= 1.0;
+            grad_logits.row_mut(i).mapv_inplace(|g| g * rewards[i] / n);
+        }
+        let grads = self.backward(x, &grad_logits);
+        (probs, grads)
     }
 
     /// Model-side statistics of one batch. `loss` is the REINFORCE loss
@@ -276,5 +292,107 @@ impl Model {
         if let Some(gpu) = &self.gpu {
             gpu.upload_weights(&self.w1, &self.b1, &self.w2, &self.b2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tiny_model() -> Model {
+        let config = Configurations {
+            input_number: 3,
+            output_number: 3,
+            hidden_layers: 5,
+            seed: Some(3),
+            ..Default::default()
+        };
+        let mut model = Model::new("grad-test", &config);
+        // Non-zero biases so every ReLU unit is clearly on or off.
+        model.b1 = Array1::from_vec(vec![0.05, -0.04, 0.03, 0.06, -0.02]);
+        model.b2 = Array1::from_vec(vec![0.1, -0.2, 0.05]);
+        model
+    }
+
+    fn loss(model: &Model, x: &Array2<f32>, actions: &Array1<usize>, rewards: &Array1<f32>) -> f64 {
+        let probs = Model::softmax2(&model.forward(x), 1.0);
+        let n = x.nrows() as f64;
+        actions
+            .iter()
+            .enumerate()
+            .map(|(i, &a)| -(rewards[i] as f64) * (probs[[i, a]] as f64).ln())
+            .sum::<f64>()
+            / n
+    }
+
+    #[test]
+    fn policy_gradient_matches_finite_differences() {
+        let mut model = tiny_model();
+        let x = Array2::from_shape_vec(
+            (4, 3),
+            vec![0.5, -0.3, 0.8, -0.6, 0.2, 0.1, 0.9, 0.4, -0.7, 0.3, -0.8, 0.5],
+        )
+        .unwrap();
+        let actions = Array1::from_vec(vec![0, 2, 1, 2]);
+        let rewards = Array1::from_vec(vec![1.0, -0.5, 0.3, 0.8]);
+        let (_, grads) = model.policy_gradient(&x, &actions, &rewards);
+
+        let eps = 1e-2f32;
+        let check = |analytic: f32, model_plus: &Model, model_minus: &Model| {
+            let numeric = (loss(model_plus, &x, &actions, &rewards)
+                - loss(model_minus, &x, &actions, &rewards))
+                / (2.0 * eps as f64);
+            assert!(
+                (analytic as f64 - numeric).abs() < 2e-3,
+                "analytic {analytic} vs numeric {numeric}"
+            );
+        };
+        for j in 0..3 {
+            let (mut p, mut m) = (model.clone(), model.clone());
+            p.b2[j] += eps;
+            m.b2[j] -= eps;
+            check(grads.b2[j], &p, &m);
+        }
+        for (r, c) in [(0, 0), (2, 3), (1, 4)] {
+            let (mut p, mut m) = (model.clone(), model.clone());
+            p.w1[[r, c]] += eps;
+            m.w1[[r, c]] -= eps;
+            check(grads.w1[[r, c]], &p, &m);
+        }
+        for (r, c) in [(0, 1), (3, 2)] {
+            let (mut p, mut m) = (model.clone(), model.clone());
+            p.w2[[r, c]] += eps;
+            m.w2[[r, c]] -= eps;
+            check(grads.w2[[r, c]], &p, &m);
+        }
+
+        // Averaged, not summed: doubling the batch with copies keeps the gradient.
+        let x2 = ndarray::concatenate(Axis(0), &[x.view(), x.view()]).unwrap();
+        let a2 = ndarray::concatenate(Axis(0), &[actions.view(), actions.view()]).unwrap();
+        let r2 = ndarray::concatenate(Axis(0), &[rewards.view(), rewards.view()]).unwrap();
+        let (_, grads2) = model.policy_gradient(&x2, &a2, &r2);
+        assert!((grads.norm() - grads2.norm()).abs() < 1e-5);
+
+        // lr = 0 leaves the weights alone.
+        let before = model.parameters();
+        model.reinforce(&x, &actions, &rewards, 0.0, 1.0);
+        assert_eq!(before, model.parameters());
+    }
+
+    #[test]
+    fn clipping_caps_the_global_norm() {
+        let mut grads = Grads {
+            w1: Array2::from_elem((2, 2), 3.0),
+            b1: Array1::from_elem(2, 3.0),
+            w2: Array2::from_elem((2, 2), 3.0),
+            b2: Array1::from_elem(2, 3.0),
+        };
+        let before = grads.norm();
+        grads.clip_norm(0.0);
+        assert_eq!(grads.norm(), before, "0 disables clipping");
+        grads.clip_norm(1.0);
+        assert!((grads.norm() - 1.0).abs() < 1e-5);
+        grads.clip_norm(5.0);
+        assert!((grads.norm() - 1.0).abs() < 1e-5, "below the cap: unchanged");
     }
 }

@@ -222,6 +222,7 @@ Budgets: bandit 1,500 batches, small-signal 4,000, null 3,000.
 | ----- | --------------------- | --------------------------- | ------------------- | ------- |
 | Before fixes | 0.487 / 0.494 / 0.500 ✗ | 0.354 / 0.305 / 0.327 ✗ | 0.352, 1.099 / 0.360, 1.099 / 0.338, 1.099 ✓ | 1 / 3 |
 | Fix 1: shaping off | 0.477 / 0.487 / 0.504 ✗ | 0.348 / 0.297 / 0.323 ✗ | 0.350, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 1 / 3 |
+| Fix 2: averaged + clipped gradients, lr 0.05 | 0.995 / 0.994 / 0.988 ✓ | 0.357 / 0.311 / 0.329 ✗ | 0.353, 1.099 / 0.364, 1.099 / 0.339, 1.099 ✓ | 2 / 3 |
 
 Before fixes:
 
@@ -232,3 +233,20 @@ Before fixes:
   signal.
 - **Null** passes only because nothing is learned at all, for the same
   reasons.
+
+Fix 2 learning-rate sweep (same suite, only `learning_rate` changed):
+
+| `learning_rate` | Bandit | Small-signal | Null |
+| --------------- | ------ | ------------ | ---- |
+| 0.01 | 0.615 / 0.708 / 0.654 ✗ | 0.352 / 0.300 / 0.321 ✗ | ✓ |
+| **0.05** (default) | 0.995 / 0.994 / 0.988 ✓ | 0.357 / 0.311 / 0.329 ✗ | ✓ |
+| 0.2 | 0.993 / 0.997 / 0.993 ✓ | 0.378 / 0.340 / 0.374 ✗ | ✓ |
+
+- 0.01 is too slow for 1,500 batches. 0.05 and 0.2 both learn the bandit;
+  0.05 keeps a margin on both sides.
+- Small-signal still fails at every rate. Its raw rewards are ±0.002, so the
+  gradient is ~500× smaller than in the bandit. That's fixed by advantage
+  normalization (fix 3), not by a bigger step.
+- At 0.2, small-signal starts drifting toward one action (0.46-0.48 of
+  calls) without learning the right one: the missing baseline at work.
+
