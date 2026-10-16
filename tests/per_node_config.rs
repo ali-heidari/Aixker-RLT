@@ -20,7 +20,7 @@ fn config(input_number: usize, output_number: usize, model_name: &str) -> Arc<Co
         model_name: model_name.to_owned(),
         log_interval: 0,
         mode: RunningMode::Infer,
-        backend: Default::default(),
+        ..Default::default()
     })
 }
 

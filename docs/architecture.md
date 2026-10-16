@@ -115,6 +115,7 @@ Provided at startup via `initialize(...)`:
 | `log_interval` (u64) | Batches between training-statistics log lines (`0` = off) |
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
+| `seed` (Option<u64>, optional) | Seeds all randomness; `None` = OS entropy (see `src/rng.rs`) |
 
 **Critical contract:** `input_number` must equal the feature vector length and `output_number` must equal the action space size — a mismatch panics at model initialization.
 

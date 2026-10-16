@@ -1,10 +1,12 @@
 use crate::diagnostics::TrainStats;
 use crate::experience::Experience;
+use crate::rng;
 
 use super::model::Model;
 use super::node::Node;
 use anyhow::{Ok, Result};
 use log::{info, warn};
+use rand::rngs::StdRng;
 use ndarray::{s, Array1, Array2};
 use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
@@ -12,13 +14,16 @@ use tokio::time::sleep;
 pub struct Worker {
     id: u32,
     learning_rate: f32,
+    /// Replay sampling; seeded from the main seed and this worker's id.
+    rng: StdRng,
 }
 
 impl Worker {
-    pub fn new(id: u32) -> Self {
+    pub fn new(id: u32, seed: Option<u64>) -> Self {
         Self {
             id,
             learning_rate: 0.00001,
+            rng: rng::stream_rng(seed, rng::STREAM_WORKER + id as u64),
         }
     }
 
@@ -51,7 +56,7 @@ impl Worker {
 
     pub fn start(node: Arc<Node>) {
         tokio::spawn(async move {
-            let mut worker = Worker::new(1);
+            let mut worker = Worker::new(1, node.config().seed);
             if let Err(e) = worker.start_to_work(node).await {
                 warn!("training worker error: {:?}", e);
             }
@@ -68,7 +73,7 @@ impl Worker {
             return Ok(());
         }
 
-        let batch = buffer.sample(node.config().batch_size as usize);
+        let batch = buffer.sample(node.config().batch_size as usize, &mut self.rng);
         drop(buffer);
 
         let model = node.model.write().unwrap();
@@ -104,7 +109,7 @@ impl Worker {
             }
             batch_counter += 1;
 
-            let batch = buffer.sample(node.config().batch_size as usize);
+            let batch = buffer.sample(node.config().batch_size as usize, &mut self.rng);
             drop(buffer);
 
             let model = node.model.write().unwrap();

@@ -1,5 +1,7 @@
 use crate::configurations::{ComputeBackend, Configurations};
 use crate::diagnostics::TrainStats;
+use crate::rng;
+use rand::rngs::StdRng;
 use crate::{footstep::Footstep, get_config as CONFIG};
 use aion_math::continuous_math::ContinuousMath;
 use aion_math::math::Math;
@@ -13,7 +15,7 @@ use crate::{
 };
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 
@@ -64,6 +66,8 @@ pub struct Node {
     success_rate_mean: RwLock<f32>,
     batch_sampled: RwLock<bool>,
     pub lr: RwLock<f32>,
+    /// Action-selection randomness (ε and policy sampling).
+    pub(crate) rng: Mutex<StdRng>,
     /// Statistics of the most recent training batch.
     pub last_stats: RwLock<Option<TrainStats>>,
     mode: RunningMode,
@@ -107,9 +111,15 @@ impl Node {
             batch_sampled: RwLock::new(false),
             lr: RwLock::new(0.0001),
             last_stats: RwLock::new(None),
+            rng: Mutex::new(rng::stream_rng(config.seed, rng::STREAM_ACTING)),
             mode,
             config,
         }
+    }
+
+    /// A copy of all model parameters, flattened (w1, b1, w2, b2).
+    pub fn weights(&self) -> Vec<f32> {
+        self.model.read().unwrap().parameters()
     }
 
     /// The configuration this node runs with.
@@ -153,11 +163,9 @@ impl Node {
     {
         let node = Arc::new(Node::new_with_config(config, 0.05, 0.5, mode, model_name));
         Node::set_default_factors(&node, node.mode);
-        let mut worker = Worker::new(1);
+        let mut worker = Worker::new(1, node.config.seed);
         match node.mode {
-            RunningMode::Training => {
-                worker = Worker::new(1);
-            }
+            RunningMode::Training => {}
             RunningMode::TrainingWithInterval => {
                 Worker::start(node.clone());
             }
@@ -185,7 +193,8 @@ impl Node {
                                 x.1.total as f32 / *node.counter.read().unwrap() as f32 - total_avg, // },
                             )
                         })
-                        .min_by(|x, y| (x.1).partial_cmp(&y.1).unwrap())
+                        // Break ties by action id: HashMap order differs per run.
+                        .min_by(|x, y| (x.1).partial_cmp(&y.1).unwrap().then(x.0.cmp(&y.0)))
                         .unwrap_or((u32::MAX, 0.0))
                         .0
                 } else {

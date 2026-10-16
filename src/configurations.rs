@@ -27,4 +27,31 @@ pub struct Configurations {
     pub mode: RunningMode,
     #[serde(default)]
     pub backend: ComputeBackend,
+    /// Seed for every source of randomness (weight init, exploration,
+    /// action sampling, replay sampling). `None` (default) uses fresh OS
+    /// entropy, so runs differ.
+    #[serde(default)]
+    pub seed: Option<u64>,
+}
+
+impl Default for Configurations {
+    /// Defaults for the optional fields. `input_number` and `output_number`
+    /// must still be set to match your features and actions, e.g.
+    /// `Configurations { input_number: 8, output_number: 3, ..Default::default() }`.
+    fn default() -> Self {
+        Self {
+            interval_secs: crate::constants::TRAIN_INTERVAL_SECS,
+            batch_size: crate::constants::BATCH_SIZE,
+            total_batches: 1_000,
+            input_number: 0,
+            output_number: 0,
+            hidden_layers: 16,
+            reply_capacity: 10_000,
+            model_name: "model.json".to_owned(),
+            log_interval: 0,
+            mode: RunningMode::Training,
+            backend: ComputeBackend::Cpu,
+            seed: None,
+        }
+    }
 }

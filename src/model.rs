@@ -1,5 +1,6 @@
 use crate::diagnostics::TrainStats;
 use crate::configurations::Configurations;
+use crate::rng;
 use crate::models::gpu_model::{GpuModel, Grads};
 use anyhow::Ok;
 use log::{info, warn};
@@ -32,7 +33,7 @@ pub struct Model {
 impl Model {
     /// A freshly initialized model for checkpoint `id`.
     pub fn new(id: &str, config: &Configurations) -> Self {
-        let mut rng = rand::thread_rng();
+        let mut rng = rng::stream_rng(config.seed, rng::STREAM_INIT);
         let uniform = Uniform::new(-0.1, 0.1);
         Self {
             w1: Array2::random_using(
@@ -82,6 +83,17 @@ impl Model {
                 self.gpu = None;
             }
         }
+    }
+
+    /// All parameters flattened in a fixed order: w1, b1, w2, b2.
+    pub fn parameters(&self) -> Vec<f32> {
+        self.w1
+            .iter()
+            .chain(self.b1.iter())
+            .chain(self.w2.iter())
+            .chain(self.b2.iter())
+            .copied()
+            .collect()
     }
 
     fn relu(x: &Array2<f32>) -> Array2<f32> {

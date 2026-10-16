@@ -164,6 +164,23 @@ Configuration is provided at startup via `initialize(...)` with a `Configuration
 | `log_interval` | Log one line of training statistics every N batches (`0` = off). See [Training diagnostics](#training-diagnostics). |
 | `mode` | `RunningMode` (`Training`, `TrainingWithInterval`, `Infer`) |
 | `backend` | Optional `ComputeBackend` (`Cpu` default, `Gpu`) |
+| `seed` | Optional `u64`. Seeds weight init, exploration, action sampling and replay sampling. Unset = fresh randomness each run. See [Reproducible runs](#reproducible-runs). |
+
+`Configurations` implements `Default`, so in Rust you only need to set what
+you change: `Configurations { input_number: 8, output_number: 3, ..Default::default() }`.
+
+### Reproducible runs
+
+Set `seed = 42` (any `u64`) to make a run repeatable. Each source of
+randomness gets its own generator, derived from the seed and a stream id:
+weight init, action selection (ε and sampling), and each training worker's
+replay sampling. Same seed + same inputs + same rewards = identical weights,
+on the same build and platform.
+
+`Training` mode is fully repeatable. `TrainingWithInterval` is not: the
+worker trains on a timer, so how many experiences exist at each batch
+depends on timing. Loading an existing checkpoint also changes the start
+point, so delete it (or use a new `model_name`) for a clean repeat.
 
 ### Training diagnostics
 

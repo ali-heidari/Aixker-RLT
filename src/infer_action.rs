@@ -6,8 +6,6 @@ use rand::distributions::{Distribution, WeightedIndex};
 use rand::Rng;
 
 pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Vec<f32>) {
-    let mut rng = rand::thread_rng();
-
     let x = Array2::from_shape_vec((1, node.config().input_number), features.clone()).unwrap();
     let model = node.model.read().unwrap();
     let logits = model.forward(&x);
@@ -39,11 +37,12 @@ pub fn infer_action(node: &Node, features: &Vec<f32>) -> (usize, Array2<f32>, Ve
 
     // 5) Epsilon-greedy exploration
     let eps: f32 = node.epsilon.write().unwrap().clone();
+    let mut rng = node.rng.lock().unwrap();
     let action = if rng.gen::<f32>() < eps {
         rng.gen_range(0..probs.len())
     } else {
         let dist = WeightedIndex::new(&probs).unwrap();
-        dist.sample(&mut rng)
+        dist.sample(&mut *rng)
     };
 
     (action, logits, probs)
