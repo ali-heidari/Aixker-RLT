@@ -7,7 +7,8 @@
 //!
 //! Set `TOY_LOG=N` to print the training statistics every N batches, and
 //! `TOY_LR=x` / `TOY_INFER_T=x` / `TOY_ENT=x` to override the default
-//! learning rate / inference temperature / entropy coefficient.
+//! learning rate / inference temperature / entropy coefficient, and
+//! `TOY_BACKEND=gpu` to train on the GPU backend.
 //!
 //! There is no delayed-reward test: the learner is one-step only (no returns
 //! and no bootstrapping), see FINDINGS.md.
@@ -17,6 +18,7 @@ mod common;
 use std::rc::Rc;
 use std::sync::Once;
 
+use aixker_rlt::configurations::Configurations;
 use common::{
     bandit_reward, config, evaluate, null_reward, small_signal_reward, train, Contexts, Eval,
     RewardFn, N_ACTIONS, SEEDS,
@@ -54,16 +56,23 @@ fn log_interval() -> u64 {
     n
 }
 
+/// Changes applied to the test config before training.
+type Tweak = dyn Fn(&mut Configurations);
+
 /// Train and evaluate one seed.
-fn run(name: &str, seed: u64, batches: usize, reward: Rc<RewardFn>) -> Eval {
+fn run(name: &str, seed: u64, batches: usize, reward: Rc<RewardFn>, tweak: &Tweak) -> Eval {
     let contexts = Rc::new(Contexts::random(seed));
     let mut cfg = config(Some(seed), batches, &format!("toy-{name}-{seed}.json"));
+    tweak(&mut cfg);
     cfg.log_interval = log_interval();
     if let Some(lr) = std::env::var("TOY_LR").ok().and_then(|v| v.parse().ok()) {
         cfg.learning_rate = lr;
     }
     if let Some(t) = std::env::var("TOY_INFER_T").ok().and_then(|v| v.parse().ok()) {
         cfg.infer_temperature = t;
+    }
+    if std::env::var("TOY_BACKEND").is_ok_and(|v| v.eq_ignore_ascii_case("gpu")) {
+        cfg.backend = aixker_rlt::ComputeBackend::Gpu;
     }
     if let Some(b) = std::env::var("TOY_ENT").ok().and_then(|v| v.parse().ok()) {
         cfg.entropy_coef = b;
@@ -84,9 +93,19 @@ fn report(name: &str, seed: u64, eval: &Eval, pass: bool) {
 
 /// Run all seeds, report each, then fail if any seed failed.
 fn check(name: &str, batches: usize, reward: Rc<RewardFn>, pass: impl Fn(&Eval) -> bool) {
+    check_with(name, batches, reward, &|_| {}, pass)
+}
+
+fn check_with(
+    name: &str,
+    batches: usize,
+    reward: Rc<RewardFn>,
+    tweak: &Tweak,
+    pass: impl Fn(&Eval) -> bool,
+) {
     let mut failed = Vec::new();
     for seed in SEEDS {
-        let eval = run(name, seed, batches, reward.clone());
+        let eval = run(name, seed, batches, reward.clone(), tweak);
         let ok = pass(&eval);
         report(name, seed, &eval, ok);
         if !ok {
@@ -125,3 +144,24 @@ fn null_rewards() {
         e.action_freq.iter().all(|&f| f <= 0.5) && e.policy_entropy >= min_entropy
     });
 }
+
+/// The README's "recommended settings for small, noisy rewards" (bigger
+/// batches and replay buffer, longer exploration), on the small-signal and
+/// null problems. Same pass criteria as above.
+#[test]
+#[ignore]
+fn recommended_settings_small_noisy_rewards() {
+    let recommended = |c: &mut Configurations| {
+        c.batch_size = 128;
+        c.reply_capacity = 4_096;
+        c.exploration_batches = 1_000;
+    };
+    check_with("rec-small-signal", 4_000, Rc::new(small_signal_reward), &recommended, |e| {
+        e.best_rate >= 0.90
+    });
+    let min_entropy = 0.9 * (N_ACTIONS as f32).ln();
+    check_with("rec-null", 3_000, Rc::new(null_reward), &recommended, move |e| {
+        e.action_freq.iter().all(|&f| f <= 0.5) && e.policy_entropy >= min_entropy
+    });
+}
+
