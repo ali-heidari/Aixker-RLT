@@ -66,6 +66,10 @@ break).
 - **Fix:** replayed experiences are reweighted by a truncated importance
   weight `min(π(a|s) / b, 2)`. Before, old and ε-random actions were
   trained on as if the current policy had chosen them.
+- **Fix:** training works with any number of actions. The per-batch
+  report assumed exactly 3 and panicked otherwise. Its per-action lines are
+  now labelled "Action 0", "Action 1", ... instead of "High/Normal/Low
+  pressure".
 - **Fix:** the policy gradient now uses the full softmax gradient
   `-r·(onehot(a) - π)`. Before, only the chosen action's term was applied,
   so the update was not the gradient of any loss.

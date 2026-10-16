@@ -187,7 +187,7 @@ and has the same bugs.
 - **E3. `report()` assumes 3 actions** (`src/node.rs:219-220`, `263-300`,
   `509-510`). `try_into::<[f32; 3]>().unwrap()` panics whenever
   `output_number != 3`. The labels ("High pressure" ...) come from a
-  load-balancer use case.
+  load-balancer use case. **Fixed**: the report now loops over all actions.
 - **E4. Training temperature ≠ acting temperature.** Actions are sampled at T
   (0.5-7) but `reinforce` trains `softmax(z / 1)`. (Part of the off-policy
   problem.)
