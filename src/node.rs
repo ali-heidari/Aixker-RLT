@@ -65,6 +65,8 @@ pub struct Node {
     stuck: RwLock<bool>,
     success_rate_mean: RwLock<f32>,
     batch_sampled: RwLock<bool>,
+    /// Finished batches at the last checkpoint `report` wrote.
+    checkpointed_batches: RwLock<usize>,
     pub lr: RwLock<f32>,
     /// Action-selection randomness (ε and policy sampling).
     pub(crate) rng: Mutex<StdRng>,
@@ -109,6 +111,7 @@ impl Node {
             stuck: RwLock::new(false),
             success_rate_mean: RwLock::new(temperature),
             batch_sampled: RwLock::new(false),
+            checkpointed_batches: RwLock::new(0),
             lr: RwLock::new(config.learning_rate),
             last_stats: RwLock::new(None),
             rng: Mutex::new(rng::stream_rng(config.seed, rng::STREAM_ACTING)),
@@ -223,8 +226,9 @@ impl Node {
                 break;
             }
         }
-        // The per-batch save runs on the step after a batch, so the last
-        // batch would otherwise never reach the checkpoint.
+        // `report` saves on the step after a batch, and with
+        // `checkpoint_every` only every N batches, so the last batches
+        // would otherwise never reach the checkpoint.
         if node.mode != RunningMode::Infer {
             if let Err(e) = node.model.read().unwrap().save_model() {
                 warn!("failed to save the final checkpoint: {e}");
@@ -402,7 +406,28 @@ impl Node {
         if self.mode != RunningMode::Infer {
             self.model.write().unwrap().sanitize();
             self.model.write().unwrap().snapshot = text;
-            self.model.read().unwrap().save_model().ok();
+            if self.checkpoint_due() {
+                self.model.read().unwrap().save_model().ok();
+            }
+        }
+    }
+
+    /// Whether `report` should save the checkpoint: always without
+    /// `checkpoint_every`, otherwise once N batches have finished since the
+    /// last save. Counting from the last save, not `batches % N`, still
+    /// saves when `TrainingWithInterval` finishes several batches between
+    /// two steps.
+    fn checkpoint_due(&self) -> bool {
+        let Some(every) = self.config.checkpoint_every else {
+            return true;
+        };
+        let batches = self.batch_history.read().unwrap().len();
+        let mut last = self.checkpointed_batches.write().unwrap();
+        if every > 0 && batches.saturating_sub(*last) as u64 >= every {
+            *last = batches;
+            true
+        } else {
+            false
         }
     }
 
@@ -632,5 +657,75 @@ mod tests {
     fn shaping_on_rewrites_reward() {
         let rewards = stored_rewards(true, "shaping-on.json");
         assert!(rewards.iter().any(|&r| r < -0.1), "{rewards:?}");
+    }
+
+    /// The batches, out of 7, after which `report` wrote the checkpoint.
+    fn checkpointed_batches(checkpoint_every: Option<u64>, name: &str) -> Vec<u32> {
+        let path = format!("./models/test.{name}");
+        let _ = std::fs::remove_file(&path);
+        let config = Arc::new(Configurations {
+            input_number: 2,
+            output_number: 3,
+            model_name: name.to_owned(),
+            seed: Some(1),
+            checkpoint_every,
+            ..Default::default()
+        });
+        let node = Arc::new(Node::new_with_config(config, 0.5, 1.0, RunningMode::Training, "test"));
+        Node::set_default_factors(&node, RunningMode::Training);
+        let mut math = ContinuousMath::new();
+        let mut saved = Vec::new();
+        for batch in 1..=7 {
+            let _ = std::fs::remove_file(&path);
+            // A finished batch; the next step reports it.
+            node.set_loss(batch, 0.0);
+            node.next(vec![0.1, 0.2], &mut math, |_, _, _| (0.5, true));
+            if std::path::Path::new(&path).exists() {
+                saved.push(batch);
+            }
+        }
+        let _ = std::fs::remove_file(&path);
+        saved
+    }
+
+    #[test]
+    fn checkpoint_every_saves_every_nth_batch() {
+        assert_eq!(checkpointed_batches(None, "checkpoint-default.json"), (1..=7).collect::<Vec<_>>());
+        assert_eq!(checkpointed_batches(Some(3), "checkpoint-every-3.json"), vec![3, 6]);
+        assert_eq!(checkpointed_batches(Some(0), "checkpoint-every-0.json"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn training_end_saves_with_checkpoint_every() {
+        let name = "checkpoint-end.json";
+        let path = format!("./models/test.{name}");
+        let _ = std::fs::remove_file(&path);
+        let config = Arc::new(Configurations {
+            interval_secs: 0,
+            batch_size: 8,
+            total_batches: 5,
+            input_number: 2,
+            output_number: 3,
+            reply_capacity: 64,
+            model_name: name.to_owned(),
+            seed: Some(1),
+            checkpoint_every: Some(1_000),
+            ..Default::default()
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let node = runtime.block_on(Node::start_with_config(
+            config,
+            |_| vec![0.1, 0.2],
+            |_, action, _| (action as f32, true),
+            RunningMode::Training,
+            "test",
+        ));
+        let saved = std::fs::read_to_string(&path);
+        let _ = std::fs::remove_file(&path);
+        let saved: Model = serde_json::from_str(&saved.expect("no checkpoint at the end")).unwrap();
+        assert_eq!(saved.parameters(), node.weights());
     }
 }

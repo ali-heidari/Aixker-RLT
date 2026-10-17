@@ -62,7 +62,7 @@ input (f32) → w1 (input_number × hidden_layers) + b1
   - `A = (r - batch mean) / batch std` — the batch mean is the baseline, and the std makes updates independent of reward scale.
   - `ρ = min(π(a|s) / b, 2)` — truncated importance weight. `b` is the probability the acting policy gave the action when it was taken (stored in the experience), `π` the current policy.
   The gradient of `-mean(ρ · A · log π(a|s) + β · H(π(·|s)))` (β = `entropy_coef`, H = policy entropy) is averaged over the batch and clipped to `max_grad_norm` before one SGD step of size `learning_rate`.
-- **Checkpoints**: model serialized to JSON (`{w1, b1, w2, b2}` via serde)
+- **Checkpoints**: model serialized to JSON (`{w1, b1, w2, b2}` via serde). `Node::report` saves after every batch, or every `checkpoint_every` batches when set, and the training loop saves once more when it ends. `Model::save_model` writes `<checkpoint>.tmp` and renames it over the checkpoint, so a process crash never leaves a partial file (no fsync, so power loss is not covered).
 - Learning rate is held in `Node.lr` (`RwLock<f32>`), starts at `learning_rate`, and can be changed at runtime
 
 ## ReplayBuffer (`reply_buffer.rs`)
@@ -118,6 +118,7 @@ Provided at startup via `initialize(...)`:
 | `hidden_layers` (usize) | Hidden layer neurons |
 | `reply_capacity` (usize) | Max replay buffer size |
 | `model_name` (String) | Checkpoint file name |
+| `checkpoint_every` (Option<u64>, optional) | Save every N batches; `None` = every batch, `0` = only at the end. The end of training always saves |
 | `log_interval` (u64) | Batches between training-statistics log lines (`0` = off) |
 | `mode` (RunningMode) | `Training`, `TrainingWithInterval`, or `Infer` |
 | `backend` (ComputeBackend, optional) | `Cpu` (default) or `Gpu` |
